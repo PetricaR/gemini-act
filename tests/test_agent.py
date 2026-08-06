@@ -207,3 +207,22 @@ def test_cloud_platform_requested_even_with_no_mcp_servers():
 
 def test_universal_search_server_is_available():
     assert MCP_SERVERS["workspace"] == "https://workspacemcp.googleapis.com/mcp/v1"
+
+
+def test_instruction_carries_todays_date():
+    """The agent is built once per process, so the date must resolve per call
+    or "today" silently drifts on a long-lived instance."""
+    from datetime import UTC, datetime
+
+    from gemini_act.agent.prompts import build_instruction
+
+    text = build_instruction()
+    assert datetime.now(UTC).strftime("%Y-%m-%d") in text
+    assert "Gemini Act" in text
+
+
+def test_agent_receives_instruction_as_a_callable():
+    from gemini_act.agent.prompts import build_instruction
+
+    agent = build_agent(_settings(), token_service=None)
+    assert agent.instruction is build_instruction

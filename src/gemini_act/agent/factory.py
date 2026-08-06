@@ -8,7 +8,7 @@ from typing import Any
 
 from google.adk import Agent
 
-from gemini_act.agent.prompts import SYSTEM_INSTRUCTION
+from gemini_act.agent.prompts import build_instruction
 from gemini_act.agent.tools import BUSINESS_TOOLS, CHAT_TOOLS, build_workspace_toolsets
 from gemini_act.config import Settings, get_settings
 from gemini_act.oauth.store import TokenService
@@ -43,7 +43,7 @@ def build_agent(
         name="gemini_act",
         model=settings.model,
         description="Takes actions in Google Workspace on behalf of a Google Chat user.",
-        instruction=SYSTEM_INSTRUCTION,
+        instruction=build_instruction,
         tools=tools,
     )
 

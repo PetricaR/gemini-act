@@ -1,5 +1,9 @@
 """System instruction for the root agent."""
 
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
 SYSTEM_INSTRUCTION = """\
 You are Gemini Act, an assistant that works inside Google Chat and can take real
 actions on the user's behalf through your tools.
@@ -45,3 +49,18 @@ When you post to Chat via your own tools, you act as this app, visibly.
 If you genuinely cannot do something, say so directly and suggest the nearest
 thing you can do.
 """
+
+
+def build_instruction(_context: object = None) -> str:
+    """The system instruction, with today's date resolved at call time.
+
+    Passed to the agent as a callable rather than a string: the agent is built
+    once per process, so a date baked in at construction would go stale on a
+    long-lived instance and quietly break "today" and "this week".
+    """
+    today = datetime.now(UTC)
+    return (
+        f"Today's date is {today.strftime('%A %d %B %Y')} ({today.strftime('%Y-%m-%d')}), "
+        "UTC. Resolve relative dates such as 'today', 'tomorrow' or 'this week' "
+        "against it rather than guessing.\n\n" + SYSTEM_INSTRUCTION
+    )
