@@ -5,13 +5,21 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
-# Secrets — never commit
+# Secrets — never commit.
+# Patterns are deliberately broad: a file named .deploy-secrets.env once slipped
+# past `.env`/`.env.*` and reached a public repo. Match anything secret-shaped.
 .env
 .env.*
 !.env.example
+*.env
+!example.env
+*secret*
+*secrets*
 credentials.json
 client_secret*.json
 *-service-account*.json
+*.pem
+*.key
 
 # Local state
 *.db

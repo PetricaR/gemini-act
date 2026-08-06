@@ -85,7 +85,10 @@ class Settings(BaseSettings):
     # Vertex AI. These two are read by ADK under their unprefixed names, so they
     # are declared with explicit aliases rather than the GEMINI_ACT_ prefix.
     project: str = Field(default="", alias="GOOGLE_CLOUD_PROJECT")
-    location: str = Field(default="us-central1", alias="GOOGLE_CLOUD_LOCATION")
+    # Gemini 3.x is served from the `global` Vertex endpoint, not a regional one —
+    # gemini-3.6-flash 404s in europe-west1 and resolves at global. This is
+    # independent of the Cloud Run region and of where Firestore lives.
+    location: str = Field(default="global", alias="GOOGLE_CLOUD_LOCATION")
     model: str = "gemini-3.6-flash"
 
     # Chat webhook

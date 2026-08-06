@@ -7,10 +7,14 @@
 set -euo pipefail
 
 PROJECT="${GOOGLE_CLOUD_PROJECT:?set GOOGLE_CLOUD_PROJECT}"
-REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
+# Where the Cloud Run service runs.
+REGION="${CLOUD_RUN_REGION:-europe-west1}"
+# Where Vertex AI serves the model. Distinct from REGION: Gemini 3.x is only
+# available from the `global` endpoint, and 404s in regional ones.
+VERTEX_LOCATION="${GOOGLE_CLOUD_LOCATION:-global}"
 SERVICE="${SERVICE_NAME:-gemini-act}"
 SA_EMAIL="${SERVICE_ACCOUNT_NAME:-gemini-act-runtime}@${PROJECT}.iam.gserviceaccount.com"
-MODEL="${GEMINI_ACT_MODEL:-gemini-2.5-flash}"
+MODEL="${GEMINI_ACT_MODEL:-gemini-3.6-flash}"
 MCP_ENABLED="${GEMINI_ACT_MCP_ENABLED:-gmail,drive,calendar,chat,docs}"
 
 : "${GEMINI_ACT_OAUTH_CLIENT_ID:?set GEMINI_ACT_OAUTH_CLIENT_ID}"
@@ -28,7 +32,7 @@ gcloud run deploy "${SERVICE}" \
   --no-allow-unauthenticated \
   --memory=1Gi \
   --timeout=300 \
-  --set-env-vars="^##^GOOGLE_CLOUD_PROJECT=${PROJECT}##GOOGLE_CLOUD_LOCATION=${REGION}##GOOGLE_GENAI_USE_VERTEXAI=TRUE##GEMINI_ACT_MODEL=${MODEL}##GEMINI_ACT_MCP_ENABLED=${MCP_ENABLED}##GEMINI_ACT_TOKEN_STORE=firestore" \
+  --set-env-vars="^##^GOOGLE_CLOUD_PROJECT=${PROJECT}##GOOGLE_CLOUD_LOCATION=${VERTEX_LOCATION}##GOOGLE_GENAI_USE_VERTEXAI=TRUE##GEMINI_ACT_MODEL=${MODEL}##GEMINI_ACT_MCP_ENABLED=${MCP_ENABLED}##GEMINI_ACT_TOKEN_STORE=firestore" \
   --quiet
 
 URL="$(gcloud run services describe "${SERVICE}" \
