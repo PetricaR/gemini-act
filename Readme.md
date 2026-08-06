@@ -62,6 +62,21 @@ iterating on prompts and tool schemas.
 
 ## Google Cloud setup
 
+### 0. Prerequisites
+
+- A **Google Workspace** account (Business or Enterprise). Google Chat apps cannot be configured
+  from a personal Google account.
+- A Google Cloud project with **billing enabled**.
+- Enrolment in the [Google Workspace Developer Preview Program](https://developers.google.com/workspace/preview).
+  The Workspace **MCP servers are Developer Preview, not GA** — without enrolment the
+  `*mcp.googleapis.com` services cannot be enabled and every Workspace toolset will fail at
+  runtime. Everything else (Chat webhook, agent, business tools) works without it: set
+  `GEMINI_ACT_MCP_ENABLED=` empty to run in that mode.
+
+You do **not** need a Marketplace listing or a domain-wide allowlist to test: an unpublished Chat
+app can be used by up to
+[5 users](https://support.google.com/a/answer/7651360) while in development.
+
 ### 1. Scripted
 
 ```bash

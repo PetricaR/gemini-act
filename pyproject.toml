@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A Google ADK agent that takes real actions from inside Google Chat"
 readme = "README.md"
 authors = [
-    { name = "Radan Petrica", email = "petrica_radan@carrefour.com" }
+    { name = "Radan Petrica", email = "petrica.radan@formare.ai" }
 ]
 requires-python = ">=3.12"
 dependencies = [

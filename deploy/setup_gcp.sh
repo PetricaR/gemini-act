@@ -21,6 +21,7 @@ gcloud services enable \
   aiplatform.googleapis.com \
   run.googleapis.com \
   cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
   firestore.googleapis.com \
   cloudresourcemanager.googleapis.com \
   iamcredentials.googleapis.com \
@@ -29,6 +30,22 @@ gcloud services enable \
   docs.googleapis.com \
   calendar-json.googleapis.com \
   people.googleapis.com
+
+# The MCP endpoints are separate services from the underlying product APIs, and
+# each must be enabled in its own right. They are part of the Google Workspace
+# Developer Preview Program — if these fail, your project is not enrolled:
+# https://developers.google.com/workspace/preview
+echo "==> Enabling Workspace MCP services (Developer Preview)"
+MCP_SERVICES="gmailmcp.googleapis.com drivemcp.googleapis.com docsmcp.googleapis.com
+sheetsmcp.googleapis.com slidesmcp.googleapis.com calendarmcp.googleapis.com
+chatmcp.googleapis.com"
+for SERVICE_API in ${MCP_SERVICES}; do
+  if gcloud services enable "${SERVICE_API}" 2>/dev/null; then
+    echo "    ${SERVICE_API}"
+  else
+    echo "    SKIPPED ${SERVICE_API} — not available to this project (Developer Preview?)"
+  fi
+done
 
 echo "==> Firestore database (native mode)"
 if ! gcloud firestore databases describe --database='(default)' >/dev/null 2>&1; then
