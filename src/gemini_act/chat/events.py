@@ -27,6 +27,62 @@ SLASH_COMMANDS: dict[str, str] = {
 KNOWN_COMMANDS = frozenset(SLASH_COMMANDS.values())
 
 
+# A Chat app built as a Google Workspace add-on receives a different payload
+# from a classic Chat app, and must reply in a different envelope. Which one you
+# get is fixed the first time the Chat API configuration is saved and cannot be
+# changed afterwards, so both shapes are supported.
+#
+#   classic:  {"type": "MESSAGE", "message": {...}, "user": {...}, "space": {...}}
+#   add-on:   {"chat": {"user": {...}, "messagePayload": {"message": ..., "space": ...}}}
+#
+# Add-on payloads are translated into the classic shape at the boundary, so
+# everything downstream stays single-shaped.
+_ADDON_PAYLOADS: dict[str, str] = {
+    "appCommandPayload": "APP_COMMAND",
+    "messagePayload": "MESSAGE",
+    "addedToSpacePayload": "ADDED_TO_SPACE",
+    "removedFromSpacePayload": "REMOVED_FROM_SPACE",
+    "buttonClickedPayload": "CARD_CLICKED",
+}
+
+
+def normalize_event(event: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Return (classic-shaped event, is_addon)."""
+    chat = event.get("chat")
+    if not isinstance(chat, dict):
+        return event, False
+
+    for key, event_type in _ADDON_PAYLOADS.items():
+        payload = chat.get(key)
+        if not isinstance(payload, dict):
+            continue
+        normalized: dict[str, Any] = {
+            "type": event_type,
+            "user": chat.get("user") or {},
+            # The space hangs off the payload, but older shapes put it on the
+            # chat object; prefer the payload and fall back.
+            "space": payload.get("space") or chat.get("space") or {},
+            "message": payload.get("message") or {},
+        }
+        if "appCommandMetadata" in payload:
+            normalized["appCommandMetadata"] = payload["appCommandMetadata"]
+        return normalized, True
+
+    logger.warning("Add-on event carried no recognised payload: %s", sorted(chat))
+    return {"type": "", "chat": chat}, True
+
+
+def to_addon_response(body: dict[str, Any]) -> dict[str, Any]:
+    """Wrap a classic Chat message body in the add-on response envelope.
+
+    An empty body stays empty: that is the acknowledgement used when the real
+    reply is posted asynchronously through the Chat API.
+    """
+    if not body:
+        return {}
+    return {"hostAppDataAction": {"chatDataAction": {"createMessageAction": {"message": body}}}}
+
+
 @dataclass(frozen=True)
 class ChatContext:
     """The parts of a Chat event the agent actually needs."""
@@ -88,6 +144,13 @@ async def handle_event(event: dict[str, Any], schedule) -> dict[str, Any]:
     `schedule(coro_fn, *args)` runs after the response is sent — Chat allows
     roughly 30 seconds synchronously, which an agent turn can exceed.
     """
+    event, is_addon = normalize_event(event)
+    if is_addon:
+        return to_addon_response(await _handle_normalized(event, schedule))
+    return await _handle_normalized(event, schedule)
+
+
+async def _handle_normalized(event: dict[str, Any], schedule) -> dict[str, Any]:
     event_type = event.get("type") or ""
 
     if event_type in {"ADDED_TO_SPACE", "APP_ADDED_TO_SPACE"}:

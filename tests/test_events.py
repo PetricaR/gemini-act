@@ -27,6 +27,28 @@ def message_event(text: str = "hello", *, command_id: str = "", thread: str = "t
     }
 
 
+def addon_message_event(text: str = "hello", *, command_id: str = "") -> dict:
+    """The payload shape a Chat app built as a Workspace add-on receives."""
+    message = {
+        "name": "spaces/AAA/messages/BBB",
+        "text": text,
+        "argumentText": text,
+        "thread": {"name": "spaces/AAA/threads/t1"},
+    }
+    payload: dict = {"message": message, "space": {"name": "spaces/AAA", "type": "DM"}}
+    key = "messagePayload"
+    if command_id:
+        key = "appCommandPayload"
+        payload["appCommandMetadata"] = {
+            "appCommandId": command_id,
+            "appCommandType": "SLASH_COMMAND",
+        }
+    return {
+        "chat": {"user": {"name": "users/123", "displayName": "Ada"}, key: payload},
+        "commonEventObject": {"hostApp": "CHAT"},
+    }
+
+
 class Scheduler:
     """Captures what would run in the background."""
 
@@ -209,3 +231,93 @@ async def test_run_and_reply_reports_agent_error(monkeypatch):
     await events.run_and_reply(events.parse_event(message_event()))
 
     assert posted[0]["cardsV2"][0]["cardId"] == "error"
+
+
+# --- Google Workspace add-on payload shape ---
+
+
+def test_normalize_passes_classic_event_through():
+    event, is_addon = events.normalize_event(message_event("hi"))
+    assert is_addon is False
+    assert event["type"] == "MESSAGE"
+
+
+def test_normalize_unwraps_addon_message():
+    event, is_addon = events.normalize_event(addon_message_event("find my doc"))
+    assert is_addon is True
+    assert event["type"] == "MESSAGE"
+    ctx = events.parse_event(event)
+    assert ctx.user_id == "users/123"
+    assert ctx.space == "spaces/AAA"
+    assert ctx.thread == "spaces/AAA/threads/t1"
+    assert ctx.text == "find my doc"
+
+
+def test_normalize_unwraps_addon_app_command():
+    event, is_addon = events.normalize_event(addon_message_event("/help", command_id="1"))
+    assert is_addon is True
+    assert event["type"] == "APP_COMMAND"
+    assert events.parse_event(event).command == "help"
+
+
+def test_normalize_unwraps_addon_added_to_space():
+    raw = {
+        "chat": {
+            "user": {"name": "users/1"},
+            "addedToSpacePayload": {"space": {"name": "spaces/Z"}},
+        }
+    }
+    event, is_addon = events.normalize_event(raw)
+    assert (event["type"], is_addon) == ("ADDED_TO_SPACE", True)
+
+
+def test_normalize_flags_unrecognised_addon_payload():
+    event, is_addon = events.normalize_event({"chat": {"mysteryPayload": {}}})
+    assert is_addon is True
+    assert event["type"] == ""
+
+
+def test_addon_response_envelope():
+    wrapped = events.to_addon_response({"text": "hello"})
+    assert wrapped == {
+        "hostAppDataAction": {
+            "chatDataAction": {"createMessageAction": {"message": {"text": "hello"}}}
+        }
+    }
+
+
+def test_addon_empty_response_stays_empty():
+    """The async-reply acknowledgement must not be wrapped, or Chat posts a blank."""
+    assert events.to_addon_response({}) == {}
+
+
+async def test_addon_added_to_space_returns_wrapped_welcome():
+    raw = {
+        "chat": {
+            "user": {"name": "users/1"},
+            "addedToSpacePayload": {"space": {"name": "spaces/Z"}},
+        }
+    }
+    response = await events.handle_event(raw, Scheduler())
+    message = response["hostAppDataAction"]["chatDataAction"]["createMessageAction"]["message"]
+    assert message["cardsV2"][0]["cardId"] == "welcome"
+
+
+async def test_addon_unauthorized_user_gets_wrapped_auth_card(monkeypatch, token_service):
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    response = await events.handle_event(addon_message_event("find my doc"), Scheduler())
+    message = response["hostAppDataAction"]["chatDataAction"]["createMessageAction"]["message"]
+    assert message["cardsV2"][0]["cardId"] == "auth"
+
+
+async def test_addon_authorized_user_acks_empty_and_schedules(monkeypatch, token_service):
+    from gemini_act.oauth.store import StoredToken
+
+    await token_service.store.put("users/123", StoredToken(refresh_token="r", scopes=["s"]))
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    scheduler = Scheduler()
+
+    response = await events.handle_event(addon_message_event("do a thing"), scheduler)
+
+    assert response == {}, "ack must be a bare empty body, not a wrapped empty message"
+    assert len(scheduler.calls) == 1

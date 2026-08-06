@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     # Chat webhook
     chat_audience: str = ""
     verify_chat_requests: bool = True
+    # Numeric GCP project number. Used to pin the Workspace add-on token issuer
+    # (service-<number>@gcp-sa-gsuiteaddons.iam.gserviceaccount.com). Leave empty
+    # only for classic Chat apps, which are issued by chat@system instead.
+    project_number: str = ""
 
     # OAuth
     oauth_client_id: str = ""
