@@ -126,6 +126,12 @@ class Settings(BaseSettings):
     # asynchronously so the agent may take longer than that.
     agent_timeout_seconds: float = 180.0
 
+    # Per-call budget for the Workspace MCP servers. ADK's default is 5s, which
+    # these servers routinely exceed — observed 6-25s for a single tools/list,
+    # so every toolset timed out and the agent silently lost its Workspace
+    # tools. Do not lower this without measuring.
+    mcp_timeout_seconds: float = 90.0
+
     @field_validator("mcp_enabled", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:

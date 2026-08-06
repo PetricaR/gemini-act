@@ -60,7 +60,11 @@ def build_workspace_toolsets(
         url = MCP_SERVERS[server]
         toolsets.append(
             McpToolset(
-                connection_params=StreamableHTTPConnectionParams(url=url),
+                connection_params=StreamableHTTPConnectionParams(
+                    url=url,
+                    # ADK defaults this to 5s; these servers need far more.
+                    timeout=settings.mcp_timeout_seconds,
+                ),
                 header_provider=_make_header_provider(server, token_service),
                 # Namespace tool names so e.g. Gmail's and Chat's `search` do
                 # not collide in the model's tool list.

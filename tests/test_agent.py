@@ -160,3 +160,21 @@ def test_every_business_tool_documents_itself():
     for tool in business.BUSINESS_TOOLS:
         assert tool.__doc__, f"{tool.__name__} needs a docstring"
         assert "Returns:" in tool.__doc__, f"{tool.__name__} must document its return shape"
+
+
+def test_mcp_toolsets_override_the_five_second_default(token_service):
+    """ADK defaults StreamableHTTP timeout to 5s; the Workspace MCP servers
+    routinely take longer, which silently strips the agent of its tools."""
+    from google.adk.tools.mcp_tool.mcp_session_manager import (
+        StreamableHTTPConnectionParams,
+    )
+
+    settings = _settings(mcp_enabled="gmail,calendar", mcp_timeout_seconds=90.0)
+    toolsets = workspace_mcp.build_workspace_toolsets(settings, token_service)
+
+    assert toolsets, "expected toolsets to be built"
+    for toolset in toolsets:
+        params = toolset._mcp_session_manager._connection_params
+        assert isinstance(params, StreamableHTTPConnectionParams)
+        assert params.timeout == 90.0
+        assert params.timeout > StreamableHTTPConnectionParams(url="x").timeout
