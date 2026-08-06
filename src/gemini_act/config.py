@@ -19,6 +19,8 @@ MCP_SERVERS: dict[str, str] = {
     "calendar": "https://calendarmcp.googleapis.com/mcp/v1",
     "chat": "https://chatmcp.googleapis.com/mcp/v1",
     "people": "https://people.googleapis.com/mcp/v1",
+    # Universal search across Workspace.
+    "workspace": "https://workspacemcp.googleapis.com/mcp/v1",
 }
 
 # OAuth scopes requested from the end user, per MCP server. Taken from the
@@ -63,13 +65,27 @@ MCP_SCOPES: dict[str, tuple[str, ...]] = {
         "https://www.googleapis.com/auth/directory.readonly",
         "https://www.googleapis.com/auth/contacts.readonly",
     ),
+    # Universal search reads across Gmail, Drive and Calendar, so it needs no
+    # scopes of its own beyond those the individual products already request.
+    "workspace": (),
 }
 
-# Always requested so we can identify the authorizing user.
+# Always requested.
+#
+# cloud-platform is required, not optional: calling a Workspace MCP server needs
+# the IAM permission `mcp.tools.call` (roles/mcp.toolUser) on the Cloud project,
+# and IAM is only evaluated when the token carries this scope. Without it every
+# tool call fails with "The caller does not have permission", which reads like a
+# Workspace consent problem and is not one. Google's own Workspace MCP codelab
+# requests it first for the same reason.
+#
+# It is a broad scope — it grants the agent the user's Google Cloud access — so
+# the grant is worth being deliberate about. It is the documented requirement.
 BASE_OAUTH_SCOPES: tuple[str, ...] = (
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/cloud-platform",
 )
 
 # Scope the app itself uses to post messages as the Chat app (service account).

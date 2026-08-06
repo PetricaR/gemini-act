@@ -178,3 +178,32 @@ def test_mcp_toolsets_override_the_five_second_default(token_service):
         assert isinstance(params, StreamableHTTPConnectionParams)
         assert params.timeout == 90.0
         assert params.timeout > StreamableHTTPConnectionParams(url="x").timeout
+
+
+def test_prompt_forbids_inventing_causes_for_tool_failures():
+    """The agent once told a user to fix account settings for an error whose
+    real cause was Developer Preview enrolment — a fix that could not work."""
+    from gemini_act.agent.prompts import SYSTEM_INSTRUCTION
+
+    lowered = SYSTEM_INSTRUCTION.lower()
+    assert "do not guess why" in lowered
+    assert "verbatim" in lowered
+    assert "i don't know why that failed" in lowered
+
+
+def test_cloud_platform_scope_is_always_requested():
+    """Workspace MCP calls need the IAM permission mcp.tools.call, which is only
+    evaluated when the token carries cloud-platform. Without it every tool call
+    fails with a misleading "caller does not have permission"."""
+    scopes = _settings(mcp_enabled="gmail").oauth_scopes
+    assert "https://www.googleapis.com/auth/cloud-platform" in scopes
+
+
+def test_cloud_platform_requested_even_with_no_mcp_servers():
+    assert "https://www.googleapis.com/auth/cloud-platform" in _settings(
+        mcp_enabled=""
+    ).oauth_scopes
+
+
+def test_universal_search_server_is_available():
+    assert MCP_SERVERS["workspace"] == "https://workspacemcp.googleapis.com/mcp/v1"
