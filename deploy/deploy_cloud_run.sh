@@ -50,6 +50,7 @@ gcloud run deploy "${SERVICE}" \
   --allow-unauthenticated \
   --memory=1Gi \
   --timeout=300 \
+  --no-cpu-throttling \
   --set-env-vars="^##^GOOGLE_CLOUD_PROJECT=${PROJECT}##GOOGLE_CLOUD_LOCATION=${VERTEX_LOCATION}##GOOGLE_GENAI_USE_VERTEXAI=TRUE##GEMINI_ACT_MODEL=${MODEL}##GEMINI_ACT_MCP_ENABLED=${MCP_ENABLED}##GEMINI_ACT_TOKEN_STORE=firestore##GEMINI_ACT_PROJECT_NUMBER=${PROJECT_NUM}##GOOGLE_API_USE_CLIENT_CERTIFICATE=false" \
   --quiet
 

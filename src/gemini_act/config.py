@@ -132,6 +132,12 @@ class Settings(BaseSettings):
     # tools. Do not lower this without measuring.
     mcp_timeout_seconds: float = 90.0
 
+    # How long a server's tool list is reused. ADK re-runs list_tools on every
+    # LLM turn and has no cross-request cache (google/adk-python#3659), which at
+    # these servers' latency dominates the agent's budget. Tool definitions are
+    # effectively static, so an hour is safe.
+    mcp_cache_ttl_seconds: float = 3600.0
+
     @field_validator("mcp_enabled", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:

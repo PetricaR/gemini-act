@@ -165,3 +165,63 @@ def test_authorization_url_requests_offline_consent():
 
 def test_redirect_uri_derives_from_base_url():
     assert _settings().oauth_redirect_uri == "https://svc.example.com/oauth/callback"
+
+
+# --- granted scopes are captured, not silently dropped ---
+
+
+class _Flow:
+    def __init__(self, scope):
+        self.oauth2session = type("S", (), {"token": {"scope": scope}})()
+
+
+class _Creds:
+    def __init__(self, scopes=None):
+        self.scopes = scopes
+
+
+def test_granted_scopes_prefers_credentials_when_populated():
+    creds = _Creds(["https://www.googleapis.com/auth/gmail.readonly"])
+    assert routes._granted_scopes(_Flow(""), creds) == [
+        "https://www.googleapis.com/auth/gmail.readonly"
+    ]
+
+
+def test_granted_scopes_falls_back_to_raw_token_response():
+    """The flow is built with scopes=None, so credentials.scopes comes back
+    empty and the granted set must be read off the token response."""
+    flow = _Flow("openid https://www.googleapis.com/auth/gmail.readonly")
+    assert routes._granted_scopes(flow, _Creds(None)) == [
+        "openid",
+        "https://www.googleapis.com/auth/gmail.readonly",
+    ]
+
+
+def test_granted_scopes_handles_list_form():
+    assert routes._granted_scopes(_Flow(["a", "b"]), _Creds(None)) == ["a", "b"]
+
+
+def test_granted_scopes_empty_when_nothing_available():
+    assert routes._granted_scopes(_Flow(""), _Creds(None)) == []
+
+
+async def test_refresh_omits_empty_scopes(token_service, monkeypatch):
+    """Passing scopes=[] would ask Google to narrow the grant to nothing."""
+    captured = {}
+
+    class FakeCredentials:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.token = "new"
+            self.refresh_token = kwargs.get("refresh_token")
+            self.expiry = None
+
+        def refresh(self, request):
+            return None
+
+    monkeypatch.setattr("gemini_act.oauth.store.Credentials", FakeCredentials)
+    monkeypatch.setattr("gemini_act.oauth.store.GoogleAuthRequest", lambda: object())
+
+    token_service._refresh(_token(scopes=[], expiry=None))
+
+    assert captured["scopes"] is None

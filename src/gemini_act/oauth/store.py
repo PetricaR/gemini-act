@@ -180,7 +180,10 @@ class TokenService:
             token_uri="https://oauth2.googleapis.com/token",
             client_id=self._settings.oauth_client_id,
             client_secret=self._settings.oauth_client_secret,
-            scopes=stored.scopes,
+            # None, not [] — an empty list asks Google to narrow the grant to
+            # nothing. Omitting it keeps whatever the user originally consented
+            # to, which also repairs records stored before scopes were captured.
+            scopes=stored.scopes or None,
         )
         credentials.refresh(GoogleAuthRequest())
         expiry = credentials.expiry

@@ -172,13 +172,34 @@ async def _exchange_code(code: str, settings: Settings) -> StoredToken:
 
         return StoredToken(
             refresh_token=credentials.refresh_token,
-            scopes=list(credentials.scopes or []),
+            scopes=_granted_scopes(flow, credentials),
             email=email,
             access_token=credentials.token or "",
             expiry=expiry,
         )
 
     return await asyncio.to_thread(_run)
+
+
+def _granted_scopes(flow: object, credentials: object) -> list[str]:
+    """The scopes Google actually granted.
+
+    The flow is built with `scopes=None` so we accept whatever the user
+    consented to, but that also leaves `credentials.scopes` empty — the granted
+    set has to be read back off the raw token response, where it arrives as a
+    space-separated string.
+    """
+    scopes = list(getattr(credentials, "scopes", None) or [])
+    if scopes:
+        return scopes
+
+    token = getattr(getattr(flow, "oauth2session", None), "token", None) or {}
+    raw = token.get("scope", "")
+    if isinstance(raw, str):
+        return raw.split()
+    if isinstance(raw, list | tuple):
+        return list(raw)
+    return []
 
 
 async def _notify_user(user_id: str, space: str, email: str) -> None:

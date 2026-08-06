@@ -16,9 +16,9 @@ import logging
 
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools.base_toolset import BaseToolset
-from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 
+from gemini_act.agent.tools.caching_toolset import CachingMcpToolset
 from gemini_act.config import MCP_SERVERS, Settings
 from gemini_act.oauth.store import TokenService
 
@@ -59,12 +59,13 @@ def build_workspace_toolsets(
     for server in settings.mcp_enabled:
         url = MCP_SERVERS[server]
         toolsets.append(
-            McpToolset(
+            CachingMcpToolset(
                 connection_params=StreamableHTTPConnectionParams(
                     url=url,
                     # ADK defaults this to 5s; these servers need far more.
                     timeout=settings.mcp_timeout_seconds,
                 ),
+                cache_ttl_seconds=settings.mcp_cache_ttl_seconds,
                 header_provider=_make_header_provider(server, token_service),
                 # Namespace tool names so e.g. Gmail's and Chat's `search` do
                 # not collide in the model's tool list.
