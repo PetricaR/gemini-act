@@ -24,19 +24,44 @@ MCP_ENABLED="${GEMINI_ACT_MCP_ENABLED:-gmail,drive,calendar,chat,docs}"
 echo "==> Deploying ${SERVICE} to ${REGION}"
 
 # Pass 1: get the service up so we can read its URL.
+#
+# On --allow-unauthenticated: Cloud Run IAM cannot gate this service, because
+# /oauth/callback is reached by the user's *browser*, redirected from Google,
+# carrying no Google identity token — IAM would reject the OAuth flow outright.
+# Authentication is enforced in the application instead, and strictly:
+#   POST /    requires a Google-signed JWT issued by chat@system.gserviceaccount
+#             .com whose audience equals this service's URL. See chat/auth.py;
+#             it fails closed, returning 500 rather than accepting when the
+#             expected audience is unset.
+#   /oauth/*  requires a `state` signed with GEMINI_ACT_STATE_SECRET.
+# Do not "harden" this back to --no-allow-unauthenticated: it silently breaks
+# both the OAuth callback and Chat delivery.
 gcloud run deploy "${SERVICE}" \
   --project="${PROJECT}" \
   --region="${REGION}" \
   --source=. \
   --service-account="${SA_EMAIL}" \
-  --no-allow-unauthenticated \
+  --allow-unauthenticated \
   --memory=1Gi \
   --timeout=300 \
   --set-env-vars="^##^GOOGLE_CLOUD_PROJECT=${PROJECT}##GOOGLE_CLOUD_LOCATION=${VERTEX_LOCATION}##GOOGLE_GENAI_USE_VERTEXAI=TRUE##GEMINI_ACT_MODEL=${MODEL}##GEMINI_ACT_MCP_ENABLED=${MCP_ENABLED}##GEMINI_ACT_TOKEN_STORE=firestore" \
   --quiet
 
+# Cloud Run exposes two hostnames (a legacy hashed one and the canonical
+# <service>-<project-number>.<region>.run.app). status.url returns the legacy
+# form, but the canonical one is what the console and `gcloud run deploy` show —
+# and the OAuth redirect URI, the Chat endpoint and CHAT_AUDIENCE must all agree
+# on a single hostname, so pick the canonical one deterministically.
+PROJECT_NUMBER="$(gcloud projects describe "${PROJECT}" --format='value(projectNumber)')"
 URL="$(gcloud run services describe "${SERVICE}" \
-  --project="${PROJECT}" --region="${REGION}" --format='value(status.url)')"
+  --project="${PROJECT}" --region="${REGION}" \
+  --format="value(metadata.annotations['run.googleapis.com/urls'])" \
+  | tr ',' '\n' | tr -d '[]"' | grep -F "${PROJECT_NUMBER}" | head -1)"
+# Fall back to status.url if the annotation is ever absent.
+if [ -z "${URL}" ]; then
+  URL="$(gcloud run services describe "${SERVICE}" \
+    --project="${PROJECT}" --region="${REGION}" --format='value(status.url)')"
+fi
 echo "==> Service URL: ${URL}"
 
 # Pass 2: bake in the URL-dependent settings.

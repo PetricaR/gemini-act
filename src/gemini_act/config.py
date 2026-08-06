@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Remote Google Workspace MCP servers.
 # https://developers.google.com/workspace/guides/configure-mcp-servers
@@ -106,8 +107,16 @@ class Settings(BaseSettings):
     firestore_collection: str = "gemini_act_tokens"
     session_db_url: str = ""
 
-    # Capabilities
-    mcp_enabled: tuple[str, ...] = ("gmail", "drive", "calendar", "chat", "docs")
+    # Capabilities. NoDecode is required: without it pydantic-settings tries to
+    # JSON-decode this env var before the validator below runs, so the plain CSV
+    # form ("gmail,drive") raises at startup.
+    mcp_enabled: Annotated[tuple[str, ...], NoDecode] = (
+        "gmail",
+        "drive",
+        "calendar",
+        "chat",
+        "docs",
+    )
 
     # Agent run budget, seconds. Chat's own sync window is ~30s, but we answer
     # asynchronously so the agent may take longer than that.

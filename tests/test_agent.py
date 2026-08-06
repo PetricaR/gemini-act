@@ -21,6 +21,24 @@ def test_mcp_enabled_accepts_csv():
     assert _settings(mcp_enabled="gmail, drive").mcp_enabled == ("gmail", "drive")
 
 
+def test_mcp_enabled_parses_from_environment(monkeypatch):
+    """The env path differs from init kwargs: pydantic-settings would otherwise
+    JSON-decode this field and blow up on plain CSV. Cloud Run sets it this way."""
+    monkeypatch.setenv("GEMINI_ACT_MCP_ENABLED", "gmail,drive,calendar,chat,docs")
+    assert Settings(token_store="memory").mcp_enabled == (
+        "gmail",
+        "drive",
+        "calendar",
+        "chat",
+        "docs",
+    )
+
+
+def test_empty_mcp_enabled_from_environment(monkeypatch):
+    monkeypatch.setenv("GEMINI_ACT_MCP_ENABLED", "")
+    assert Settings(token_store="memory").mcp_enabled == ()
+
+
 def test_unknown_mcp_server_is_rejected_at_startup():
     with pytest.raises(ValidationError, match="Unknown MCP server"):
         _settings(mcp_enabled="gmail,teleportation")
