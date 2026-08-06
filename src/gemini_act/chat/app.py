@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import BackgroundTasks, Depends, FastAPI, Request
 
 from gemini_act.chat.auth import require_chat_request
-from gemini_act.chat.events import handle_event
+from gemini_act.chat.events import handle_event, normalize_event
 from gemini_act.config import get_settings
 from gemini_act.oauth.routes import router as oauth_router
 
@@ -42,7 +42,14 @@ async def chat_webhook(request: Request, background: BackgroundTasks) -> dict[st
     after the response has been sent.
     """
     event = await request.json()
-    logger.info("Chat event: %s", event.get("type"))
+    # Log the normalized type: the raw add-on payload has no top-level "type",
+    # so reading it here would log None for every add-on request.
+    normalized, is_addon = normalize_event(event)
+    logger.info(
+        "Chat event: %s (%s)",
+        normalized.get("type") or "unrecognised",
+        "add-on" if is_addon else "classic",
+    )
     return await handle_event(event, background.add_task)
 
 
