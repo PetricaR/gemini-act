@@ -15,6 +15,12 @@ VERTEX_LOCATION="${GOOGLE_CLOUD_LOCATION:-global}"
 SERVICE="${SERVICE_NAME:-gemini-act}"
 SA_EMAIL="${SERVICE_ACCOUNT_NAME:-gemini-act-runtime}@${PROJECT}.iam.gserviceaccount.com"
 MODEL="${GEMINI_ACT_MODEL:-gemini-3.6-flash}"
+# Pins the Workspace add-on token issuer, and is needed before the first deploy.
+PROJECT_NUM="$(gcloud projects describe "${PROJECT}" --format='value(projectNumber)')"
+# ADK defaults GOOGLE_API_USE_CLIENT_CERTIFICATE to "true" (google-auth defaults
+# it to false), so every MCP session attempts an mTLS channel that Cloud Run has
+# no client certificate for. It falls back correctly but logs a warning each
+# time and wastes an ADC lookup; set below in --set-env-vars.
 MCP_ENABLED="${GEMINI_ACT_MCP_ENABLED:-gmail,drive,calendar,chat,docs}"
 
 : "${GEMINI_ACT_OAUTH_CLIENT_ID:?set GEMINI_ACT_OAUTH_CLIENT_ID}"
@@ -44,7 +50,7 @@ gcloud run deploy "${SERVICE}" \
   --allow-unauthenticated \
   --memory=1Gi \
   --timeout=300 \
-  --set-env-vars="^##^GOOGLE_CLOUD_PROJECT=${PROJECT}##GOOGLE_CLOUD_LOCATION=${VERTEX_LOCATION}##GOOGLE_GENAI_USE_VERTEXAI=TRUE##GEMINI_ACT_MODEL=${MODEL}##GEMINI_ACT_MCP_ENABLED=${MCP_ENABLED}##GEMINI_ACT_TOKEN_STORE=firestore" \
+  --set-env-vars="^##^GOOGLE_CLOUD_PROJECT=${PROJECT}##GOOGLE_CLOUD_LOCATION=${VERTEX_LOCATION}##GOOGLE_GENAI_USE_VERTEXAI=TRUE##GEMINI_ACT_MODEL=${MODEL}##GEMINI_ACT_MCP_ENABLED=${MCP_ENABLED}##GEMINI_ACT_TOKEN_STORE=firestore##GEMINI_ACT_PROJECT_NUMBER=${PROJECT_NUM}##GOOGLE_API_USE_CLIENT_CERTIFICATE=false" \
   --quiet
 
 # Cloud Run exposes two hostnames (a legacy hashed one and the canonical
