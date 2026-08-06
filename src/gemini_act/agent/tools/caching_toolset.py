@@ -46,9 +46,7 @@ class CachingMcpToolset(McpToolset):
             return None
         return tools
 
-    async def get_tools(
-        self, readonly_context: ReadonlyContext | None = None
-    ) -> list[BaseTool]:
+    async def get_tools(self, readonly_context: ReadonlyContext | None = None) -> list[BaseTool]:
         key = readonly_context.user_id if readonly_context else ""
 
         cached = self._fresh(key)
