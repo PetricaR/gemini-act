@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     # are declared with explicit aliases rather than the GEMINI_ACT_ prefix.
     project: str = Field(default="", alias="GOOGLE_CLOUD_PROJECT")
     location: str = Field(default="us-central1", alias="GOOGLE_CLOUD_LOCATION")
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-3.6-flash"
 
     # Chat webhook
     chat_audience: str = ""
