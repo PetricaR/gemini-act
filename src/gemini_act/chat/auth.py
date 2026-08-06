@@ -1,0 +1,60 @@
+"""Verification that a request really came from Google Chat.
+
+Every request Chat sends carries a bearer token issued by
+`chat@system.gserviceaccount.com`, whose audience is the HTTP endpoint URL
+configured on the Chat API page. Anything that fails to verify gets a 401.
+https://developers.google.com/workspace/chat/verify-requests-from-chat
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from fastapi import Header, HTTPException
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
+
+from gemini_act.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+CHAT_ISSUER = "chat@system.gserviceaccount.com"
+
+
+def _verify_sync(token: str, audience: str) -> bool:
+    try:
+        claims = id_token.verify_oauth2_token(token, google_requests.Request(), audience)
+    except Exception as exc:
+        logger.warning("Chat token verification failed: %s", exc)
+        return False
+    if claims.get("email") != CHAT_ISSUER:
+        logger.warning("Chat token has unexpected issuer: %s", claims.get("email"))
+        return False
+    return True
+
+
+async def verify_chat_token(token: str, audience: str) -> bool:
+    """Verify a Chat-issued bearer token against the expected audience."""
+    return await asyncio.to_thread(_verify_sync, token, audience)
+
+
+async def require_chat_request(authorization: str | None = Header(default=None)) -> None:
+    """FastAPI dependency guarding the Chat webhook."""
+    settings = get_settings()
+    if not settings.verify_chat_requests:
+        logger.warning("Chat request verification is DISABLED — do not run this way in production")
+        return
+
+    if not settings.chat_audience:
+        # Failing closed: without an audience we cannot verify anything, and
+        # accepting unverified events would leave the endpoint wide open.
+        logger.error("GEMINI_ACT_CHAT_AUDIENCE is unset; rejecting request")
+        raise HTTPException(status_code=500, detail="Server misconfigured")
+
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+
+    token = authorization.removeprefix("Bearer ").strip()
+    if not await verify_chat_token(token, settings.chat_audience):
+        raise HTTPException(status_code=401, detail="Invalid token")

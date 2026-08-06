@@ -1,0 +1,47 @@
+[project]
+name = "gemini-act"
+version = "0.1.0"
+description = "A Google ADK agent that takes real actions from inside Google Chat"
+readme = "README.md"
+authors = [
+    { name = "Radan Petrica", email = "petrica_radan@carrefour.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "google-adk[gcp,mcp]>=2.6.2",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "google-auth>=2.38",
+    "google-auth-oauthlib>=1.2",
+    "google-api-python-client>=2.160",
+    "pydantic-settings>=2.7",
+    "google-cloud-firestore>=2.20",
+    "itsdangerous>=2.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "httpx>=0.28",
+    "ruff>=0.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gemini_act"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
