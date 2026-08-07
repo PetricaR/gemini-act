@@ -23,7 +23,7 @@ Google exposes the *same* first-party servers through **Cloud Agent Registry**
 (`agentregistry.googleapis.com`), under a different, non-allowlisted entitlement. Instead of a
 static public URL, each server is a *resource* in Agent Registry:
 
-```
+```text
 projects/{project}/locations/{location}/mcpServers/{id}
 ```
 
@@ -49,7 +49,7 @@ config and the Agent Registry resource path — wrong for both, for the same rea
 **Fix:** `GOOGLE_CLOUD_LOCATION=global` everywhere (`.env`, `.env.example`,
 `deploy/deploy_cloud_run.sh` default).
 
-### 2. The runtime service account needs Agent Registry read access — no documented role
+### 2. The runtime service account needs Agent Registry read access — `roles/agentregistry.viewer`
 
 **Symptom:** `403 Forbidden`, `agentregistry.googleapis.com` responds with `PERMISSION_DENIED`.
 
@@ -109,7 +109,7 @@ different GCP project, **re-run the listing above** and update the table.
 Current mapping (`website-formare-ai`, provisioned 2026-08-07):
 
 | `mcp_enabled` key | Resource id | Display name |
-|---|---|---|
+| --- | --- | --- |
 | `gmail` | `agentregistry-00000000-0000-0000-694e-6cd3d0570769` | `gmailmcp.googleapis.com` |
 | `drive` | `agentregistry-00000000-0000-0000-1ac8-248c78d4ed27` | `drivemcp.googleapis.com` |
 | `calendar` | `agentregistry-00000000-0000-0000-16d6-cee169897afc` | `calendarmcp.googleapis.com` |
@@ -188,7 +188,7 @@ Generate secrets separately and paste the resulting value in.
 
 ## Current architecture
 
-```
+```text
 Settings.mcp_enabled (config.py)
         │
         ▼

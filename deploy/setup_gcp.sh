@@ -67,7 +67,11 @@ else
 fi
 
 echo "==> IAM roles"
-for ROLE in roles/aiplatform.user roles/datastore.user roles/logging.logWriter; do
+# agentregistry.viewer grants agentregistry.mcpServers.get, which the runtime
+# service account needs to resolve each Workspace MCP server's endpoint via
+# Agent Registry (see docx/workspace-mcp-agent-registry.md, gotcha #2). Found
+# empirically — there was no single documented role name for this preview API.
+for ROLE in roles/aiplatform.user roles/datastore.user roles/logging.logWriter roles/agentregistry.viewer; do
   gcloud projects add-iam-policy-binding "${PROJECT}" \
     --member="serviceAccount:${SA_EMAIL}" \
     --role="${ROLE}" \
@@ -86,12 +90,10 @@ Still to do by hand (see README.md):
        https://<your-cloud-run-url>/oauth/callback
   2. Confirm the servers in config.MCP_SERVERS (gmailmcp.googleapis.com,
      drivemcp.googleapis.com, calendarmcp.googleapis.com, chatmcp.googleapis.com,
-     people.googleapis.com) show up under Agent Registry for this project, and that
-     ${SA_EMAIL} has read access to them — the runtime service account calls
-     agentregistry.googleapis.com with its own identity to resolve each
-     server's endpoint. There is no single documented IAM role for this yet;
-     grant whatever the console's "Agent Registry" section asks for a caller
-     that only needs to read/use registered servers.
+     people.googleapis.com) show up under Agent Registry for this project.
+     roles/agentregistry.viewer (granted above) covers read access to them; the
+     resource ids in config.MCP_SERVERS are project-specific opaque strings —
+     see docx/workspace-mcp-agent-registry.md if this is ever a different project.
   3. Deploy:  ./deploy/deploy_cloud_run.sh
   4. Grant Google Chat permission to invoke the service (deploy script does this).
   5. Google Chat API configuration page: set the HTTP endpoint URL to the
