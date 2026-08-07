@@ -19,15 +19,20 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 # `agent/tools/workspace_mcp.py` for how these ids are resolved into toolsets.
 #
 # Values are the mcpServers/{id} segment under
-# projects/{project}/locations/{location}/mcpServers/{id}. Only servers actually
-# present in Agent Registry for this project are listed; Docs/Sheets/Slides/the
-# universal "workspace" search server are not registered here and are omitted.
+# projects/{project}/locations/{location}/mcpServers/{id}. For these first-party
+# "Google MCP" servers, the registered id is the full service name (as shown in
+# the Agent Registry console's "Name" column), not the short prefix before
+# ".googleapis.com" — projects/{p}/locations/global/mcpServers/gmailmcp 404s;
+# .../mcpServers/gmailmcp.googleapis.com is the real resource. Only servers
+# actually present in Agent Registry for this project are listed; Docs/Sheets/
+# Slides/the universal "workspace" search server are not registered here and
+# are omitted.
 MCP_SERVERS: dict[str, str] = {
-    "gmail": "gmailmcp",
-    "drive": "drivemcp",
-    "calendar": "calendarmcp",
-    "chat": "chatmcp",
-    "people": "people",
+    "gmail": "gmailmcp.googleapis.com",
+    "drive": "drivemcp.googleapis.com",
+    "calendar": "calendarmcp.googleapis.com",
+    "chat": "chatmcp.googleapis.com",
+    "people": "people.googleapis.com",
 }
 
 # OAuth scopes requested from the end user, per MCP server. Taken from the

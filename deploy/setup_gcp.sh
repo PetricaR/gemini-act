@@ -84,8 +84,9 @@ Service account: ${SA_EMAIL}
 Still to do by hand (see README.md):
   1. OAuth consent screen + Web client, redirect URI:
        https://<your-cloud-run-url>/oauth/callback
-  2. Confirm the servers in config.MCP_SERVERS (gmailmcp, drivemcp, calendarmcp,
-     chatmcp, people) show up under Agent Registry for this project, and that
+  2. Confirm the servers in config.MCP_SERVERS (gmailmcp.googleapis.com,
+     drivemcp.googleapis.com, calendarmcp.googleapis.com, chatmcp.googleapis.com,
+     people.googleapis.com) show up under Agent Registry for this project, and that
      ${SA_EMAIL} has read access to them — the runtime service account calls
      agentregistry.googleapis.com with its own identity to resolve each
      server's endpoint. There is no single documented IAM role for this yet;
