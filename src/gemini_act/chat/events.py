@@ -279,8 +279,14 @@ async def run_and_reply(ctx: ChatContext) -> None:
 
     try:
         if ctx.thread_key:
-            await client.post_message(ctx.space, body, thread_key=ctx.thread_key)
+            result = await client.post_message(ctx.space, body, thread_key=ctx.thread_key)
         else:
-            await client.post_message(ctx.space, body, thread_name=ctx.thread or None)
+            result = await client.post_message(ctx.space, body, thread_name=ctx.thread or None)
+        logger.info(
+            "Posted reply %s into thread %s of %s",
+            result.get("name"),
+            (result.get("thread") or {}).get("name"),
+            ctx.space,
+        )
     except Exception:
         logger.exception("Could not post reply into %s", ctx.space)
