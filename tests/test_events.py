@@ -8,14 +8,16 @@ from gemini_act.chat import events
 from gemini_act.oauth.store import StoredToken, TokenService
 
 
-def message_event(text: str = "hello", *, command_id: str = "", thread: str = "t1") -> dict:
+def message_event(
+    text: str = "hello", *, command_id: str = "", thread: str = "t1", space_type: str = "DM"
+) -> dict:
     message: dict = {
         "name": "spaces/AAA/messages/BBB",
         "text": text,
         "argumentText": text,
         "sender": {"name": "users/123", "displayName": "Ada"},
         "thread": {"name": f"spaces/AAA/threads/{thread}"},
-        "space": {"name": "spaces/AAA", "type": "DM"},
+        "space": {"name": "spaces/AAA", "type": space_type},
     }
     if command_id:
         message["slashCommand"] = {"commandId": command_id}
@@ -23,7 +25,7 @@ def message_event(text: str = "hello", *, command_id: str = "", thread: str = "t
         "type": "MESSAGE",
         "message": message,
         "user": {"name": "users/123", "displayName": "Ada"},
-        "space": {"name": "spaces/AAA", "type": "DM"},
+        "space": {"name": "spaces/AAA", "type": space_type},
     }
 
 
@@ -82,17 +84,35 @@ def test_parse_event_extracts_identity_and_thread():
     assert ctx.command is None
 
 
-def test_session_id_is_per_thread():
-    a = events.parse_event(message_event(thread="t1")).session_id
-    b = events.parse_event(message_event(thread="t2")).session_id
+def test_session_id_is_per_thread_outside_dms():
+    """Named spaces can hold several topics; keep memory separate per thread."""
+    a = events.parse_event(message_event(thread="t1", space_type="SPACE")).session_id
+    b = events.parse_event(message_event(thread="t2", space_type="SPACE")).session_id
     assert a != b
     assert "/" not in a
 
 
 def test_session_id_falls_back_to_space_without_thread():
-    event = message_event()
+    event = message_event(space_type="SPACE")
     del event["message"]["thread"]
     assert events.parse_event(event).session_id == "spaces_AAA"
+
+
+def test_dm_session_id_is_stable_across_threads():
+    """Chat can mint a fresh thread per message in a DM; memory must not reset."""
+    a = events.parse_event(message_event(thread="t1", space_type="DM")).session_id
+    b = events.parse_event(message_event(thread="t2", space_type="DM")).session_id
+    assert a == b == "spaces_AAA"
+
+
+def test_dm_thread_key_is_stable_and_space_scoped():
+    ctx = events.parse_event(message_event(thread="t1", space_type="DM"))
+    assert ctx.thread_key == "dm-AAA"
+
+
+def test_non_dm_has_no_thread_key():
+    ctx = events.parse_event(message_event(thread="t1", space_type="SPACE"))
+    assert ctx.thread_key is None
 
 
 def test_command_recognised_by_id():
@@ -163,7 +183,7 @@ async def test_reset_command_clears_the_session(monkeypatch, token_service):
     monkeypatch.setattr(events, "reset_session", fake_reset)
     response = await events.handle_event(message_event("/reset", command_id="3"), Scheduler())
 
-    assert cleared == [("users/123", "spaces_AAA_threads_t1")]
+    assert cleared == [("users/123", "spaces_AAA")]
     assert "fresh" in response["text"]
 
 
@@ -173,12 +193,16 @@ async def test_whoami_reports_connected_account(authorized, monkeypatch):
     assert "ada@example.com" in response["text"]
 
 
-async def test_run_and_reply_posts_answer_in_thread(monkeypatch):
+async def test_run_and_reply_posts_in_dm_uses_stable_thread_key(monkeypatch):
+    """DMs must not fragment into a new thread bubble per exchange, so the reply
+    is keyed by a stable app-chosen key, not the (possibly fresh) incoming thread."""
     posted: list[dict] = []
 
     class FakeClient:
-        async def post_message(self, space, body, thread_name=None):
-            posted.append({"space": space, "body": body, "thread": thread_name})
+        async def post_message(self, space, body, thread_name=None, thread_key=None):
+            posted.append(
+                {"space": space, "body": body, "thread_name": thread_name, "thread_key": thread_key}
+            )
             return {}
 
     async def fake_run(user_id, session_id, message):
@@ -187,19 +211,43 @@ async def test_run_and_reply_posts_answer_in_thread(monkeypatch):
     monkeypatch.setattr(events, "get_chat_client", lambda: FakeClient())
     monkeypatch.setattr(events, "run_agent", fake_run)
 
-    ctx = events.parse_event(message_event("when's my next meeting"))
+    ctx = events.parse_event(message_event("when's my next meeting", space_type="DM"))
     await events.run_and_reply(ctx)
 
     assert posted[0]["space"] == "spaces/AAA"
-    assert posted[0]["thread"] == "spaces/AAA/threads/t1"
+    assert posted[0]["thread_key"] == "dm-AAA"
+    assert posted[0]["thread_name"] is None
     assert posted[0]["body"]["text"] == "Your next meeting is at 3pm."
+
+
+async def test_run_and_reply_posts_in_space_uses_incoming_thread(monkeypatch):
+    posted: list[dict] = []
+
+    class FakeClient:
+        async def post_message(self, space, body, thread_name=None, thread_key=None):
+            posted.append(
+                {"space": space, "body": body, "thread_name": thread_name, "thread_key": thread_key}
+            )
+            return {}
+
+    async def fake_run(user_id, session_id, message):
+        return "Your next meeting is at 3pm."
+
+    monkeypatch.setattr(events, "get_chat_client", lambda: FakeClient())
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    ctx = events.parse_event(message_event("when's my next meeting", space_type="SPACE"))
+    await events.run_and_reply(ctx)
+
+    assert posted[0]["thread_name"] == "spaces/AAA/threads/t1"
+    assert posted[0]["thread_key"] is None
 
 
 async def test_run_and_reply_reports_timeout_instead_of_failing_silently(monkeypatch):
     posted: list[dict] = []
 
     class FakeClient:
-        async def post_message(self, space, body, thread_name=None):
+        async def post_message(self, space, body, thread_name=None, thread_key=None):
             posted.append(body)
             return {}
 
@@ -218,7 +266,7 @@ async def test_run_and_reply_reports_agent_error(monkeypatch):
     posted: list[dict] = []
 
     class FakeClient:
-        async def post_message(self, space, body, thread_name=None):
+        async def post_message(self, space, body, thread_name=None, thread_key=None):
             posted.append(body)
             return {}
 

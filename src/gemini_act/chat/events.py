@@ -90,14 +90,35 @@ class ChatContext:
     user_id: str
     display_name: str
     space: str
+    space_type: str
     thread: str
     text: str
     command: str | None
 
     @property
+    def is_dm(self) -> bool:
+        return self.space_type == "DM"
+
+    @property
+    def thread_key(self) -> str | None:
+        """A stable, app-chosen thread key for spaces where Chat mints a fresh
+        thread per top-level message (DMs) — used instead of `thread` so the
+        whole 1:1 conversation stays one continuous thread instead of a new
+        collapsed bubble per exchange. `None` outside DMs, where each incoming
+        `thread` is trusted as the topic the user actually replied in."""
+        if self.is_dm:
+            return f"dm-{self.space.rsplit('/', 1)[-1]}"
+        return None
+
+    @property
     def session_id(self) -> str:
-        """Conversation memory is per thread, so the agent follows a discussion."""
-        source = self.thread or self.space
+        """Conversation memory is per thread, so the agent follows a discussion.
+
+        DMs are the exception: since Chat can mint a fresh thread per message
+        there (see `thread_key`), keying memory on it would silently reset the
+        agent's memory on every message. Use the (stable) space instead.
+        """
+        source = self.space if self.is_dm else (self.thread or self.space)
         return source.replace("/", "_") or "unknown"
 
 
@@ -115,6 +136,7 @@ def parse_event(event: dict[str, Any]) -> ChatContext:
         user_id=user.get("name", ""),
         display_name=user.get("displayName", ""),
         space=space.get("name", ""),
+        space_type=space.get("type", ""),
         thread=thread.get("name", ""),
         text=text,
         command=_extract_command(event, message),
@@ -239,6 +261,9 @@ async def run_and_reply(ctx: ChatContext) -> None:
         )
 
     try:
-        await client.post_message(ctx.space, body, thread_name=ctx.thread or None)
+        if ctx.thread_key:
+            await client.post_message(ctx.space, body, thread_key=ctx.thread_key)
+        else:
+            await client.post_message(ctx.space, body, thread_name=ctx.thread or None)
     except Exception:
         logger.exception("Could not post reply into %s", ctx.space)

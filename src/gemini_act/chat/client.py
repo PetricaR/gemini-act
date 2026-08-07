@@ -56,14 +56,27 @@ class ChatClient:
         space: str,
         body: dict[str, Any],
         thread_name: str | None = None,
+        thread_key: str | None = None,
     ) -> dict[str, Any]:
-        """Post an arbitrary message body (text and/or cards) into a space."""
+        """Post an arbitrary message body (text and/or cards) into a space.
+
+        `thread_name` targets an existing thread resource by name — used to
+        keep a reply attached to whatever thread its triggering message
+        arrived in. `thread_key` is a caller-chosen stable string instead:
+        Chat maps it to one thread and keeps reusing it across calls, which is
+        what keeps a DM as a single continuous thread instead of fragmenting
+        into a new one per exchange. Pass at most one; `thread_name` wins if
+        both are given.
+        """
         service = await self._get_service()
         payload = dict(body)
         kwargs: dict[str, Any] = {"parent": space, "body": payload}
         if thread_name:
             payload["thread"] = {"name": thread_name}
             # Without this, a message naming a thread starts a new one instead.
+            kwargs["messageReplyOption"] = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
+        elif thread_key:
+            payload["thread"] = {"threadKey": thread_key}
             kwargs["messageReplyOption"] = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
 
         def _execute() -> dict[str, Any]:
