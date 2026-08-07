@@ -1,4 +1,4 @@
-"""An McpToolset that caches its tool list.
+"""A toolset wrapper that caches its inner toolset's tool list.
 
 ADK calls `get_tools()` on every LLM turn, and each call is a live `list_tools`
 round trip to the MCP server. The Workspace MCP servers take 15-25 seconds to
@@ -11,6 +11,10 @@ does yet (google/adk-python#3659), so it is done here.
 Cached per user: the tool list a server returns can in principle depend on the
 caller's grants, and the header provider resolves a different token per user, so
 sharing one list across users would be wrong.
+
+Wraps by composition rather than subclassing a specific toolset class, so it can
+sit in front of anything that implements `BaseToolset` — including the
+`AgentRegistrySingleMcpToolset` returned by `AgentRegistry.get_mcp_toolset()`.
 """
 
 from __future__ import annotations
@@ -18,24 +22,24 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any
 
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools.base_tool import BaseTool
-from google.adk.tools.mcp_tool import McpToolset
+from google.adk.tools.base_toolset import BaseToolset
 
 logger = logging.getLogger(__name__)
 
 
-class CachingMcpToolset(McpToolset):
-    """`McpToolset` that reuses a previously fetched tool list for a while."""
+class CachingToolset(BaseToolset):
+    """Wraps a toolset and reuses a previously fetched tool list for a while."""
 
-    def __init__(self, *args: Any, cache_ttl_seconds: float = 3600.0, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, inner: BaseToolset, *, cache_ttl_seconds: float = 3600.0) -> None:
+        super().__init__(tool_filter=inner.tool_filter, tool_name_prefix=inner.tool_name_prefix)
+        self._inner = inner
         self._cache_ttl_seconds = cache_ttl_seconds
         self._tool_cache: dict[str, tuple[float, list[BaseTool]]] = {}
         self._cache_locks: dict[str, asyncio.Lock] = {}
-        self._label = getattr(self, "tool_name_prefix", None) or "mcp"
+        self._label = inner.tool_name_prefix or "mcp"
 
     def _fresh(self, key: str) -> list[BaseTool] | None:
         entry = self._tool_cache.get(key)
@@ -61,7 +65,7 @@ class CachingMcpToolset(McpToolset):
                 return cached
 
             started = time.monotonic()
-            tools = await super().get_tools(readonly_context)
+            tools = await self._inner.get_tools(readonly_context)
             elapsed = time.monotonic() - started
             self._tool_cache[key] = (time.monotonic(), tools)
             logger.info(
@@ -72,6 +76,9 @@ class CachingMcpToolset(McpToolset):
                 self._cache_ttl_seconds,
             )
             return tools
+
+    async def close(self) -> None:
+        await self._inner.close()
 
     def invalidate(self, user_id: str | None = None) -> None:
         """Drop cached tools, for one user or for everyone."""

@@ -29,25 +29,18 @@ gcloud services enable \
   drive.googleapis.com \
   docs.googleapis.com \
   calendar-json.googleapis.com \
-  people.googleapis.com
+  people.googleapis.com \
+  agentregistry.googleapis.com
 
-# The MCP endpoints are separate services from the underlying product APIs, and
-# each must be enabled in its own right. They are part of the Google Workspace
-# Developer Preview Program — if these fail, your project is not enrolled:
-# https://developers.google.com/workspace/preview
-echo "==> Enabling Workspace MCP services (Developer Preview)"
-# workspacemcp is the shared umbrella service; the official codelab lists it
-# alongside the per-product ones and it is easy to miss.
-MCP_SERVICES="workspacemcp.googleapis.com gmailmcp.googleapis.com
-drivemcp.googleapis.com docsmcp.googleapis.com sheetsmcp.googleapis.com
-slidesmcp.googleapis.com calendarmcp.googleapis.com chatmcp.googleapis.com"
-for SERVICE_API in ${MCP_SERVICES}; do
-  if gcloud services enable "${SERVICE_API}" 2>/dev/null; then
-    echo "    ${SERVICE_API}"
-  else
-    echo "    SKIPPED ${SERVICE_API} — not available to this project (Developer Preview?)"
-  fi
-done
+# Workspace MCP servers (Gmail, Drive, Calendar, Chat, People) are resolved via
+# Cloud Agent Registry (agentregistry.googleapis.com, enabled above) rather than
+# called directly at their public https://*mcp.googleapis.com/mcp/v1 URLs. Those
+# direct URLs belong to the Workspace MCP Developer Preview Program, which is
+# allowlist-gated per project (https://developers.google.com/workspace/preview);
+# Agent Registry exposes the same first-party servers without that enrollment.
+# See `config.MCP_SERVERS` for exactly which servers this app expects to find
+# registered — confirm they show up for this project in the Agent Registry
+# console before deploying.
 
 echo "==> Firestore database (native mode)"
 if ! gcloud firestore databases describe --database='(default)' >/dev/null 2>&1; then
@@ -81,8 +74,15 @@ Service account: ${SA_EMAIL}
 Still to do by hand (see README.md):
   1. OAuth consent screen + Web client, redirect URI:
        https://<your-cloud-run-url>/oauth/callback
-  2. Deploy:  ./deploy/deploy_cloud_run.sh
-  3. Grant Google Chat permission to invoke the service (deploy script does this).
-  4. Google Chat API configuration page: set the HTTP endpoint URL to the
+  2. Confirm the servers in config.MCP_SERVERS (gmailmcp, drivemcp, calendarmcp,
+     chatmcp, people) show up under Agent Registry for this project, and that
+     ${SA_EMAIL} has read access to them — the runtime service account calls
+     agentregistry.googleapis.com with its own identity to resolve each
+     server's endpoint. There is no single documented IAM role for this yet;
+     grant whatever the console's "Agent Registry" section asks for a caller
+     that only needs to read/use registered servers.
+  3. Deploy:  ./deploy/deploy_cloud_run.sh
+  4. Grant Google Chat permission to invoke the service (deploy script does this).
+  5. Google Chat API configuration page: set the HTTP endpoint URL to the
      Cloud Run URL and register the slash commands.
 EOF

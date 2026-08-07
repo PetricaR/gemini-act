@@ -14,6 +14,33 @@ def _settings(**overrides) -> Settings:
     return Settings(**{"token_store": "memory", **overrides})
 
 
+class FakeAgentRegistry:
+    """Stands in for `AgentRegistry`: no ADC, no network.
+
+    Real `AgentRegistry.__init__` calls `google.auth.default()` and
+    `get_mcp_toolset()` makes a live call to agentregistry.googleapis.com to
+    resolve each server's endpoint — neither is available in tests.
+    """
+
+    def __init__(self, *, project_id: str, location: str) -> None:
+        self.project_id = project_id
+        self.location = location
+
+    def get_mcp_toolset(self, mcp_server_name: str):
+        from google.adk.tools.mcp_tool import McpToolset
+        from google.adk.tools.mcp_tool.mcp_session_manager import (
+            StreamableHTTPConnectionParams,
+        )
+
+        server_id = mcp_server_name.rsplit("/", 1)[-1]
+        return McpToolset(
+            connection_params=StreamableHTTPConnectionParams(
+                url=f"https://example.invalid/{server_id}"
+            ),
+            tool_name_prefix=server_id,
+        )
+
+
 # --- configuration ---
 
 
@@ -24,13 +51,13 @@ def test_mcp_enabled_accepts_csv():
 def test_mcp_enabled_parses_from_environment(monkeypatch):
     """The env path differs from init kwargs: pydantic-settings would otherwise
     JSON-decode this field and blow up on plain CSV. Cloud Run sets it this way."""
-    monkeypatch.setenv("GEMINI_ACT_MCP_ENABLED", "gmail,drive,calendar,chat,docs")
+    monkeypatch.setenv("GEMINI_ACT_MCP_ENABLED", "gmail,drive,calendar,chat,people")
     assert Settings(token_store="memory").mcp_enabled == (
         "gmail",
         "drive",
         "calendar",
         "chat",
-        "docs",
+        "people",
     )
 
 
@@ -49,11 +76,10 @@ def test_every_server_has_declared_scopes():
 
 
 def test_oauth_scopes_cover_enabled_servers_without_duplicates():
-    scopes = _settings(mcp_enabled="gmail,drive,docs").oauth_scopes
+    scopes = _settings(mcp_enabled="gmail,drive,calendar").oauth_scopes
     assert len(scopes) == len(set(scopes)), "scopes must not repeat"
     assert "https://www.googleapis.com/auth/gmail.readonly" in scopes
-    # docs and drive share drive.readonly; it should appear exactly once
-    assert scopes.count("https://www.googleapis.com/auth/drive.readonly") == 1
+    assert "https://www.googleapis.com/auth/drive.readonly" in scopes
 
 
 # --- agent assembly ---
@@ -65,7 +91,8 @@ def test_anonymous_agent_omits_workspace_toolsets():
     assert len(agent.tools) == len(business.BUSINESS_TOOLS) + 3  # + chat tools
 
 
-def test_agent_with_token_service_adds_one_toolset_per_enabled_server(token_service):
+def test_agent_with_token_service_adds_one_toolset_per_enabled_server(token_service, monkeypatch):
+    monkeypatch.setattr(workspace_mcp, "AgentRegistry", FakeAgentRegistry)
     settings = _settings(mcp_enabled="gmail,calendar")
     agent = build_agent(settings, token_service=token_service)
     base = len(business.BUSINESS_TOOLS) + 3
@@ -81,18 +108,17 @@ async def test_header_provider_supplies_the_users_bearer_token(token_service, mo
         return f"token-for-{user_id}"
 
     monkeypatch.setattr(token_service, "get_access_token", fake_access_token)
-    provider = workspace_mcp._make_header_provider("gmail", token_service)
+    provider = workspace_mcp._make_header_provider(token_service)
 
     class Ctx:
         user_id = "users/123"
 
     headers = await provider(Ctx())
     assert headers["Authorization"] == "Bearer token-for-users/123"
-    assert "text/event-stream" in headers["Accept"]
 
 
 async def test_header_provider_omits_authorization_when_user_has_no_token(token_service):
-    provider = workspace_mcp._make_header_provider("gmail", token_service)
+    provider = workspace_mcp._make_header_provider(token_service)
 
     class Ctx:
         user_id = "users/unknown"
@@ -108,7 +134,7 @@ async def test_different_users_get_different_headers(token_service, monkeypatch)
         return f"token-{user_id}"
 
     monkeypatch.setattr(token_service, "get_access_token", fake_access_token)
-    provider = workspace_mcp._make_header_provider("drive", token_service)
+    provider = workspace_mcp._make_header_provider(token_service)
 
     class Ctx:
         def __init__(self, uid):
@@ -162,19 +188,23 @@ def test_every_business_tool_documents_itself():
         assert "Returns:" in tool.__doc__, f"{tool.__name__} must document its return shape"
 
 
-def test_mcp_toolsets_override_the_five_second_default(token_service):
+def test_mcp_toolsets_override_the_five_second_default(token_service, monkeypatch):
     """ADK defaults StreamableHTTP timeout to 5s; the Workspace MCP servers
-    routinely take longer, which silently strips the agent of its tools."""
+    routinely take longer, which silently strips the agent of its tools.
+    AgentRegistry.get_mcp_toolset() builds its own connection params with that
+    same 5s default and does not expose a way to override it, so it must be
+    raised after construction."""
     from google.adk.tools.mcp_tool.mcp_session_manager import (
         StreamableHTTPConnectionParams,
     )
 
+    monkeypatch.setattr(workspace_mcp, "AgentRegistry", FakeAgentRegistry)
     settings = _settings(mcp_enabled="gmail,calendar", mcp_timeout_seconds=90.0)
     toolsets = workspace_mcp.build_workspace_toolsets(settings, token_service)
 
     assert toolsets, "expected toolsets to be built"
     for toolset in toolsets:
-        params = toolset._mcp_session_manager._connection_params
+        params = toolset._inner._mcp_session_manager._connection_params
         assert isinstance(params, StreamableHTTPConnectionParams)
         assert params.timeout == 90.0
         assert params.timeout > StreamableHTTPConnectionParams(url="x").timeout
@@ -203,10 +233,6 @@ def test_cloud_platform_requested_even_with_no_mcp_servers():
     assert "https://www.googleapis.com/auth/cloud-platform" in _settings(
         mcp_enabled=""
     ).oauth_scopes
-
-
-def test_universal_search_server_is_available():
-    assert MCP_SERVERS["workspace"] == "https://workspacemcp.googleapis.com/mcp/v1"
 
 
 def test_instruction_carries_todays_date():

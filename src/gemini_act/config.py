@@ -8,19 +8,26 @@ from typing import Annotated
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-# Remote Google Workspace MCP servers.
-# https://developers.google.com/workspace/guides/configure-mcp-servers
+# Google Workspace MCP servers, resolved through Cloud Agent Registry rather than
+# called directly at their public https://*mcp.googleapis.com/mcp/v1 URLs.
+#
+# The direct URLs belong to the Workspace MCP Developer Preview Program, which is
+# allowlist-gated (https://developers.google.com/workspace/preview) — a project
+# that is not enrolled gets a 403 on every call. Agent Registry
+# (agentregistry.googleapis.com) exposes the same first-party servers under a
+# different, broader entitlement and does not require that enrollment. See
+# `agent/tools/workspace_mcp.py` for how these ids are resolved into toolsets.
+#
+# Values are the mcpServers/{id} segment under
+# projects/{project}/locations/{location}/mcpServers/{id}. Only servers actually
+# present in Agent Registry for this project are listed; Docs/Sheets/Slides/the
+# universal "workspace" search server are not registered here and are omitted.
 MCP_SERVERS: dict[str, str] = {
-    "gmail": "https://gmailmcp.googleapis.com/mcp/v1",
-    "drive": "https://drivemcp.googleapis.com/mcp/v1",
-    "docs": "https://docsmcp.googleapis.com/mcp/v1",
-    "sheets": "https://sheetsmcp.googleapis.com/mcp/v1",
-    "slides": "https://slidesmcp.googleapis.com/mcp/v1",
-    "calendar": "https://calendarmcp.googleapis.com/mcp/v1",
-    "chat": "https://chatmcp.googleapis.com/mcp/v1",
-    "people": "https://people.googleapis.com/mcp/v1",
-    # Universal search across Workspace.
-    "workspace": "https://workspacemcp.googleapis.com/mcp/v1",
+    "gmail": "gmailmcp",
+    "drive": "drivemcp",
+    "calendar": "calendarmcp",
+    "chat": "chatmcp",
+    "people": "people",
 }
 
 # OAuth scopes requested from the end user, per MCP server. Taken from the
@@ -34,21 +41,6 @@ MCP_SCOPES: dict[str, tuple[str, ...]] = {
     "drive": (
         "https://www.googleapis.com/auth/drive.readonly",
         "https://www.googleapis.com/auth/drive.file",
-    ),
-    "docs": (
-        "https://www.googleapis.com/auth/drive.readonly",
-        "https://www.googleapis.com/auth/drive.file",
-        "https://www.googleapis.com/auth/documents",
-    ),
-    "sheets": (
-        "https://www.googleapis.com/auth/drive.readonly",
-        "https://www.googleapis.com/auth/drive.file",
-        "https://www.googleapis.com/auth/spreadsheets",
-    ),
-    "slides": (
-        "https://www.googleapis.com/auth/drive.readonly",
-        "https://www.googleapis.com/auth/drive.file",
-        "https://www.googleapis.com/auth/presentations",
     ),
     "calendar": (
         "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
@@ -65,9 +57,6 @@ MCP_SCOPES: dict[str, tuple[str, ...]] = {
         "https://www.googleapis.com/auth/directory.readonly",
         "https://www.googleapis.com/auth/contacts.readonly",
     ),
-    # Universal search reads across Gmail, Drive and Calendar, so it needs no
-    # scopes of its own beyond those the individual products already request.
-    "workspace": (),
 }
 
 # Always requested.
@@ -135,7 +124,7 @@ class Settings(BaseSettings):
         "drive",
         "calendar",
         "chat",
-        "docs",
+        "people",
     )
 
     # Agent run budget, seconds. Chat's own sync window is ~30s, but we answer
