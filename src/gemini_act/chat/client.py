@@ -16,6 +16,7 @@ from functools import lru_cache
 from typing import Any
 
 import google.auth
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 from gemini_act.config import CHAT_BOT_SCOPE
@@ -40,6 +41,18 @@ class ChatClient:
     @staticmethod
     def _build_service() -> Any:
         credentials, _ = google.auth.default(scopes=[CHAT_BOT_SCOPE])
+        return build("chat", "v1", credentials=credentials, cache_discovery=False)
+
+    @staticmethod
+    def _build_user_service(access_token: str) -> Any:
+        """A one-off service acting as the given user, not the app.
+
+        Used only for deleting the user's *own* messages (/clean): the app's
+        own `chat.bot` identity can delete its own messages, but Chat does not
+        let an app delete messages a human sent — that requires the human's
+        own OAuth token and the `chat.messages` scope.
+        """
+        credentials = Credentials(token=access_token)
         return build("chat", "v1", credentials=credentials, cache_discovery=False)
 
     async def post_text(
@@ -83,6 +96,54 @@ class ChatClient:
             return service.spaces().messages().create(**kwargs).execute()
 
         return await asyncio.to_thread(_execute)
+
+    async def list_messages(self, space: str) -> list[dict[str, Any]]:
+        """List every message in a space, across all pages.
+
+        Uses the app's own identity: a Chat app that is a member of the space
+        can read messages there, including the human's, even though it cannot
+        delete anyone's but its own (see `delete_message`).
+        """
+        service = await self._get_service()
+        messages: list[dict[str, Any]] = []
+        page_token: str | None = None
+
+        def _execute(token: str | None) -> dict[str, Any]:
+            return (
+                service.spaces()
+                .messages()
+                .list(parent=space, pageSize=100, pageToken=token)
+                .execute()
+            )
+
+        while True:
+            response = await asyncio.to_thread(_execute, page_token)
+            messages.extend(response.get("messages", []))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                return messages
+
+    async def delete_message(self, name: str, *, access_token: str | None = None) -> None:
+        """Delete a message.
+
+        With app identity (the default), this only succeeds for a message the
+        app itself sent. Pass `access_token` (the sender's own OAuth token) to
+        delete a message a human sent instead — Chat requires the human's own
+        credentials for that, not the app's.
+
+        `force=True` also deletes any threaded replies, so this does not fail
+        when called on a thread's root message out of order.
+        """
+        service = (
+            await asyncio.to_thread(self._build_user_service, access_token)
+            if access_token
+            else await self._get_service()
+        )
+
+        def _execute() -> None:
+            service.spaces().messages().delete(name=name, force=True).execute()
+
+        await asyncio.to_thread(_execute)
 
     async def list_members(self, space: str) -> list[dict[str, Any]]:
         service = await self._get_service()

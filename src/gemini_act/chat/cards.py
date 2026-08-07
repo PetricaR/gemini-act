@@ -48,6 +48,7 @@ def welcome_card() -> dict[str, Any]:
                                 "<b>Commands</b><br>"
                                 "/auth — connect or reconnect your Google account<br>"
                                 "/reset — forget this thread's conversation<br>"
+                                "/clean — delete every message in this conversation<br>"
                                 "/whoami — show which account I'm using<br>"
                                 "/help — show this message"
                             )

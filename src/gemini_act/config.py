@@ -105,6 +105,13 @@ BASE_OAUTH_SCOPES: tuple[str, ...] = (
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
     "https://www.googleapis.com/auth/cloud-platform",
+    # Full read/write/delete over the user's own Chat messages, as the user —
+    # distinct from CHAT_BOT_SCOPE below, which only ever acts as the app.
+    # Requested unconditionally (not gated on `chat` being in mcp_enabled)
+    # because /clean uses it directly, independent of the Chat MCP toolset.
+    # The app's own messages are deleted with its own identity and never need
+    # this; this is only for deleting the *user's* own messages on request.
+    "https://www.googleapis.com/auth/chat.messages",
 )
 
 # Scope the app itself uses to post messages as the Chat app (service account).

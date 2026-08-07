@@ -143,6 +143,7 @@ Register the slash commands, whose ids must match
 | 2 | `/auth` | Connect your Google account |
 | 3 | `/reset` | Forget this thread's conversation |
 | 4 | `/whoami` | Show which account I'm using |
+| 5 | `/clean` | Delete every message in this conversation |
 
 > Your Workspace admin may need to allowlist the app before it is installable. Worth checking
 > early — it blocks all end-to-end testing.

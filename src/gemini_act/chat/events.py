@@ -22,6 +22,7 @@ SLASH_COMMANDS: dict[str, str] = {
     "2": "auth",
     "3": "reset",
     "4": "whoami",
+    "5": "clean",
 }
 
 KNOWN_COMMANDS = frozenset(SLASH_COMMANDS.values())
@@ -208,7 +209,7 @@ async def _handle_normalized(event: dict[str, Any], schedule) -> dict[str, Any]:
     )
 
     if ctx.command:
-        return await _handle_command(ctx)
+        return await _handle_command(ctx, schedule)
 
     if not ctx.text:
         return cards.text_message("Say something and I'll get to work.")
@@ -216,7 +217,7 @@ async def _handle_normalized(event: dict[str, Any], schedule) -> dict[str, Any]:
     return await _handle_message(ctx, schedule)
 
 
-async def _handle_command(ctx: ChatContext) -> dict[str, Any]:
+async def _handle_command(ctx: ChatContext, schedule) -> dict[str, Any]:
     settings = get_settings()
 
     if ctx.command == "help":
@@ -231,6 +232,12 @@ async def _handle_command(ctx: ChatContext) -> dict[str, Any]:
     if ctx.command == "reset":
         await reset_session(ctx.user_id, ctx.session_id)
         return cards.text_message("🧹 Forgotten. This thread starts fresh.")
+
+    if ctx.command == "clean":
+        # Deleting every message can take a while for a long history, well
+        # past Chat's ~30s synchronous budget — same reasoning as _handle_message.
+        schedule(clean_conversation_and_reply, ctx)
+        return {}
 
     if ctx.command == "whoami":
         token = await get_token_service().get_token(ctx.user_id)
@@ -262,6 +269,22 @@ async def _handle_message(ctx: ChatContext, schedule) -> dict[str, Any]:
     return {}
 
 
+async def _post_reply(client, ctx: ChatContext, body: dict[str, Any]) -> None:
+    try:
+        if ctx.thread_key:
+            result = await client.post_message(ctx.space, body, thread_key=ctx.thread_key)
+        else:
+            result = await client.post_message(ctx.space, body, thread_name=ctx.thread or None)
+        logger.info(
+            "Posted reply %s into thread %s of %s",
+            result.get("name"),
+            (result.get("thread") or {}).get("name"),
+            ctx.space,
+        )
+    except Exception:
+        logger.exception("Could not post reply into %s", ctx.space)
+
+
 async def run_and_reply(ctx: ChatContext) -> None:
     """Run the agent, then post its answer back into the thread."""
     client = get_chat_client()
@@ -277,16 +300,58 @@ async def run_and_reply(ctx: ChatContext) -> None:
             "I hit an unexpected error and couldn't finish. The details are in the logs."
         )
 
+    await _post_reply(client, ctx, body)
+
+
+async def clean_conversation_and_reply(ctx: ChatContext) -> None:
+    """Delete every message in the conversation, then confirm.
+
+    The app deletes its own messages with its own identity; a human's
+    messages can only be deleted with that human's own OAuth token (Chat does
+    not let an app delete messages it did not send), which is why this needs
+    the `chat.messages` scope granted during /auth. Also resets the agent's
+    memory, same as /reset, so a clean conversation starts with a clean slate
+    on both sides.
+    """
+    client = get_chat_client()
     try:
-        if ctx.thread_key:
-            result = await client.post_message(ctx.space, body, thread_key=ctx.thread_key)
+        access_token = await get_token_service().get_access_token(ctx.user_id)
+        messages = await client.list_messages(ctx.space)
+
+        deleted = 0
+        skipped_own = 0
+        for message in messages:
+            name = message.get("name")
+            if not name:
+                continue
+            is_bot_message = (message.get("sender") or {}).get("type") == "BOT"
+            try:
+                if is_bot_message:
+                    await client.delete_message(name)
+                elif access_token:
+                    await client.delete_message(name, access_token=access_token)
+                else:
+                    skipped_own += 1
+                    continue
+                deleted += 1
+            except Exception:
+                logger.warning("Could not delete message %s", name, exc_info=True)
+
+        await reset_session(ctx.user_id, ctx.session_id)
+
+        if skipped_own:
+            settings = get_settings()
+            body = cards.auth_card(
+                start_url(ctx.user_id, ctx.space, settings),
+                reason=(
+                    f"Deleted {deleted} message(s) I sent. Reconnect your account "
+                    f"(scope update) so I can delete the {skipped_own} you sent too."
+                ),
+            )
         else:
-            result = await client.post_message(ctx.space, body, thread_name=ctx.thread or None)
-        logger.info(
-            "Posted reply %s into thread %s of %s",
-            result.get("name"),
-            (result.get("thread") or {}).get("name"),
-            ctx.space,
-        )
+            body = cards.text_message(f"🧹 Deleted {deleted} message(s). Clean slate.")
     except Exception:
-        logger.exception("Could not post reply into %s", ctx.space)
+        logger.exception("Clean failed for %s in %s", ctx.user_id, ctx.space)
+        body = cards.error_card("Couldn't clean the conversation. Details are in the logs.")
+
+    await _post_reply(client, ctx, body)

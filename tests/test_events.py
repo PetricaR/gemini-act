@@ -231,6 +231,127 @@ async def test_whoami_reports_connected_account(authorized, monkeypatch):
     assert "ada@example.com" in response["text"]
 
 
+# --- /clean ---
+
+
+def test_clean_command_recognised_by_id():
+    assert events.parse_event(message_event("/clean", command_id="5")).command == "clean"
+
+
+async def test_clean_command_schedules_and_acks_empty(monkeypatch, token_service):
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    scheduler = Scheduler()
+
+    response = await events.handle_event(message_event("/clean", command_id="5"), scheduler)
+
+    assert response == {}, "deleting messages can be slow, so it runs like /message does"
+    assert len(scheduler.calls) == 1
+    fn, (ctx,) = scheduler.calls[0]
+    assert fn is events.clean_conversation_and_reply
+
+
+class FakeCleanClient:
+    """Records list/delete calls and the final confirmation post."""
+
+    def __init__(self, messages: list[dict]) -> None:
+        self._messages = messages
+        self.deleted: list[tuple[str, str | None]] = []
+        self.posted: list[dict] = []
+
+    async def list_messages(self, space):
+        return self._messages
+
+    async def delete_message(self, name, *, access_token=None):
+        self.deleted.append((name, access_token))
+
+    async def post_message(self, space, body, thread_name=None, thread_key=None):
+        self.posted.append(body)
+        return {}
+
+
+async def test_clean_deletes_bot_messages_with_app_identity_and_users_with_their_token(
+    monkeypatch, token_service
+):
+    async def fake_access_token(user_id):
+        return "user-token"
+
+    monkeypatch.setattr(token_service, "get_access_token", fake_access_token)
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+
+    fake = FakeCleanClient(
+        [
+            {"name": "spaces/AAA/messages/1", "sender": {"type": "HUMAN"}},
+            {"name": "spaces/AAA/messages/2", "sender": {"type": "BOT"}},
+        ]
+    )
+    monkeypatch.setattr(events, "get_chat_client", lambda: fake)
+
+    reset_calls: list[tuple[str, str]] = []
+
+    async def fake_reset(user_id, session_id):
+        reset_calls.append((user_id, session_id))
+
+    monkeypatch.setattr(events, "reset_session", fake_reset)
+
+    ctx = events.parse_event(message_event("/clean", command_id="5"))
+    await events.clean_conversation_and_reply(ctx)
+
+    assert ("spaces/AAA/messages/1", "user-token") in fake.deleted
+    assert ("spaces/AAA/messages/2", None) in fake.deleted
+    assert reset_calls == [("users/123", "spaces_AAA")]
+    assert "2 message" in fake.posted[0]["text"]
+
+
+async def test_clean_without_authorization_only_deletes_bot_messages_and_asks_to_reconnect(
+    monkeypatch, token_service
+):
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+
+    fake = FakeCleanClient(
+        [
+            {"name": "spaces/AAA/messages/1", "sender": {"type": "HUMAN"}},
+            {"name": "spaces/AAA/messages/2", "sender": {"type": "BOT"}},
+        ]
+    )
+    monkeypatch.setattr(events, "get_chat_client", lambda: fake)
+    monkeypatch.setattr(events, "reset_session", _fake_reset)
+
+    ctx = events.parse_event(message_event("/clean", command_id="5"))
+    await events.clean_conversation_and_reply(ctx)
+
+    assert fake.deleted == [("spaces/AAA/messages/2", None)], "only the bot's own message"
+    assert fake.posted[0]["cardsV2"][0]["cardId"] == "auth"
+
+
+async def test_clean_continues_past_individual_delete_failures(monkeypatch, token_service):
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    monkeypatch.setattr(events, "reset_session", _fake_reset)
+
+    class FlakyClient(FakeCleanClient):
+        async def delete_message(self, name, *, access_token=None):
+            if name.endswith("1"):
+                raise RuntimeError("boom")
+            await super().delete_message(name, access_token=access_token)
+
+    fake = FlakyClient(
+        [
+            {"name": "spaces/AAA/messages/1", "sender": {"type": "BOT"}},
+            {"name": "spaces/AAA/messages/2", "sender": {"type": "BOT"}},
+        ]
+    )
+    monkeypatch.setattr(events, "get_chat_client", lambda: fake)
+
+    ctx = events.parse_event(message_event("/clean", command_id="5"))
+    await events.clean_conversation_and_reply(ctx)
+
+    assert fake.deleted == [("spaces/AAA/messages/2", None)]
+    assert "1 message" in fake.posted[0]["text"]
+
+
+async def _fake_reset(user_id: str, session_id: str) -> None:
+    pass
+
+
 async def test_run_and_reply_posts_in_dm_uses_stable_thread_key(monkeypatch):
     """DMs must not fragment into a new thread bubble per exchange, so the reply
     is keyed by a stable app-chosen key, not the (possibly fresh) incoming thread."""
