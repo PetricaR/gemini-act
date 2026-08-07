@@ -6,6 +6,16 @@
 # configuration page. See README.md for those.
 set -euo pipefail
 
+# Load .env from the repo root if present. Values here win over anything
+# already exported in the shell — same as running `source .env` by hand.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -f "${REPO_ROOT}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/.env"
+  set +a
+fi
+
 PROJECT="${GOOGLE_CLOUD_PROJECT:?set GOOGLE_CLOUD_PROJECT}"
 REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 SERVICE="${SERVICE_NAME:-gemini-act}"
