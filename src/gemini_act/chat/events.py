@@ -91,13 +91,10 @@ class ChatContext:
     display_name: str
     space: str
     space_type: str
+    is_dm: bool
     thread: str
     text: str
     command: str | None
-
-    @property
-    def is_dm(self) -> bool:
-        return self.space_type == "DM"
 
     @property
     def thread_key(self) -> str | None:
@@ -132,11 +129,21 @@ def parse_event(event: dict[str, Any]) -> ChatContext:
     # to the raw text for events that do not provide it.
     text = (message.get("argumentText") or message.get("text") or "").strip()
 
+    # Google Chat has three overlapping signals for "this is a 1:1 with the
+    # bot", spread across API versions and payload shapes: the deprecated
+    # `type: "DM"`, its replacement `spaceType: "DIRECT_MESSAGE"`, and the
+    # boolean `singleUserBotDm`. Which ones a given event actually populates
+    # is not consistent (Workspace add-on payloads have been observed to omit
+    # the legacy `type` entirely), so check all three instead of trusting one.
+    raw_type = space.get("spaceType") or space.get("type") or ""
+    is_dm = raw_type in {"DIRECT_MESSAGE", "DM"} or bool(space.get("singleUserBotDm"))
+
     return ChatContext(
         user_id=user.get("name", ""),
         display_name=user.get("displayName", ""),
         space=space.get("name", ""),
-        space_type=space.get("type", ""),
+        space_type=raw_type,
+        is_dm=is_dm,
         thread=thread.get("name", ""),
         text=text,
         command=_extract_command(event, message),
@@ -189,6 +196,16 @@ async def _handle_normalized(event: dict[str, Any], schedule) -> dict[str, Any]:
     if not ctx.user_id or not ctx.space:
         logger.warning("Event missing user or space; ignoring")
         return {}
+    # Cheap insurance against a repeat of the deprecated-`type`-field bug: if
+    # DM detection is ever wrong again for some other payload shape, this line
+    # says so immediately instead of needing a debug redeploy to find out.
+    logger.info(
+        "space=%s space_type=%s is_dm=%s thread=%s",
+        ctx.space,
+        ctx.space_type,
+        ctx.is_dm,
+        ctx.thread,
+    )
 
     if ctx.command:
         return await _handle_command(ctx)

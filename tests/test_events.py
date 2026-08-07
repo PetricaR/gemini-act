@@ -115,6 +115,44 @@ def test_non_dm_has_no_thread_key():
     assert ctx.thread_key is None
 
 
+# --- DM detection across payload shapes ---
+#
+# `type: "DM"` is deprecated; real Workspace add-on payloads have been observed
+# to send only `spaceType` or only `singleUserBotDm`, with the legacy `type`
+# absent entirely. Each of these must be recognised on its own.
+
+
+def test_dm_detected_via_space_type_field():
+    event = message_event(thread="t1")
+    del event["space"]["type"]
+    del event["message"]["space"]["type"]
+    event["space"]["spaceType"] = "DIRECT_MESSAGE"
+    event["message"]["space"]["spaceType"] = "DIRECT_MESSAGE"
+    ctx = events.parse_event(event)
+    assert ctx.is_dm is True
+    assert ctx.thread_key == "dm-AAA"
+
+
+def test_dm_detected_via_single_user_bot_dm_flag():
+    event = message_event(thread="t1")
+    del event["space"]["type"]
+    del event["message"]["space"]["type"]
+    event["space"]["singleUserBotDm"] = True
+    ctx = events.parse_event(event)
+    assert ctx.is_dm is True
+
+
+def test_group_chat_space_type_is_not_a_dm():
+    event = message_event(thread="t1")
+    event["space"]["type"] = "ROOM"
+    event["message"]["space"]["type"] = "ROOM"
+    event["space"]["spaceType"] = "GROUP_CHAT"
+    event["message"]["space"]["spaceType"] = "GROUP_CHAT"
+    ctx = events.parse_event(event)
+    assert ctx.is_dm is False
+    assert ctx.thread_key is None
+
+
 def test_command_recognised_by_id():
     assert events.parse_event(message_event("/help", command_id="1")).command == "help"
 
