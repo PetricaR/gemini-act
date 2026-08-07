@@ -19,20 +19,28 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 # `agent/tools/workspace_mcp.py` for how these ids are resolved into toolsets.
 #
 # Values are the mcpServers/{id} segment under
-# projects/{project}/locations/{location}/mcpServers/{id}. For these first-party
-# "Google MCP" servers, the registered id is the full service name (as shown in
-# the Agent Registry console's "Name" column), not the short prefix before
-# ".googleapis.com" — projects/{p}/locations/global/mcpServers/gmailmcp 404s;
-# .../mcpServers/gmailmcp.googleapis.com is the real resource. Only servers
-# actually present in Agent Registry for this project are listed; Docs/Sheets/
-# Slides/the universal "workspace" search server are not registered here and
-# are omitted.
+# projects/{project}/locations/{location}/mcpServers/{id}. The Console's "Name"
+# column (e.g. "gmailmcp.googleapis.com") is a display label, NOT the resource
+# id — neither that string nor its short prefix ("gmailmcp") is a valid id (the
+# API 400s on a "." in the segment, 404s on the bare prefix). The real id is an
+# opaque, auto-generated string unique to this project's Agent Registry
+# provisioning (agentregistry-00000000-0000-0000-XXXX-XXXXXXXXXXXX), found by
+# listing and matching on displayName:
+#
+#   curl -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+#     "https://agentregistry.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/global/mcpServers?pageSize=100"
+#
+# These values are therefore specific to the website-formare-ai project as
+# provisioned on 2026-08-07 — re-run the listing above and update this table if
+# ever pointed at a different GCP project. Only servers actually present in
+# Agent Registry for this project are listed; Docs/Sheets/Slides/the universal
+# "workspace" search server are not registered here and are omitted.
 MCP_SERVERS: dict[str, str] = {
-    "gmail": "gmailmcp.googleapis.com",
-    "drive": "drivemcp.googleapis.com",
-    "calendar": "calendarmcp.googleapis.com",
-    "chat": "chatmcp.googleapis.com",
-    "people": "people.googleapis.com",
+    "gmail": "agentregistry-00000000-0000-0000-694e-6cd3d0570769",
+    "drive": "agentregistry-00000000-0000-0000-1ac8-248c78d4ed27",
+    "calendar": "agentregistry-00000000-0000-0000-16d6-cee169897afc",
+    "chat": "agentregistry-00000000-0000-0000-263a-52b590fe274c",
+    "people": "agentregistry-00000000-0000-0000-30c9-08a2641d3196",
 }
 
 # OAuth scopes requested from the end user, per MCP server. Taken from the
