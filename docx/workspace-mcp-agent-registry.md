@@ -125,12 +125,25 @@ Current mapping (`website-formare-ai`, provisioned 2026-08-07):
 | `calendar` | `agentregistry-00000000-0000-0000-16d6-cee169897afc` | `calendarmcp.googleapis.com` |
 | `chat` | `agentregistry-00000000-0000-0000-263a-52b590fe274c` | `chatmcp.googleapis.com` |
 | `people` | `agentregistry-00000000-0000-0000-30c9-08a2641d3196` | `people.googleapis.com` |
+| `bigquery` | `agentregistry-00000000-0000-0000-1169-26595affcf5c` | `bigquery.googleapis.com` |
+| `maps` | `agentregistry-00000000-0000-0000-087b-e3d7f8e1001a` | `mapstools.googleapis.com` |
+| `storage` | `agentregistry-00000000-0000-0000-2d58-34bf4b09480a` | `storage.googleapis.com` |
 
-Not registered for this project (and therefore not usable): Docs, Sheets, Slides, the universal
-"workspace" search server. Registered but intentionally not wired in (infra/ops, not relevant to a
-Chat business-user assistant): BigQuery, Compute, Cloud Run, Storage, Monitoring, Logging,
-Dataplex, Pub/Sub, Cloud Trace, Cloud Resource Manager, Vertex AI, AppTopology, SaaS Service Mgmt,
-Agent Registry itself, Maps.
+OAuth scopes for `bigquery` and `storage` were verified against each API's discovery document
+(`https://bigquery.googleapis.com/discovery/v1/apis/bigquery/v2/rest`,
+`https://storage.googleapis.com/discovery/v1/apis/storage/v1/rest`), not guessed:
+`bigquery.readonly` is not even in `jobs.query`'s accepted-scopes list (only `bigquery`,
+`cloud-platform`, `cloud-platform.read-only` are), and this server's `execute_sql`/`create_bucket`/
+`write_text`/`delete_object` tools need write access, not just read. `maps` requests no extra scope
+— its tools (`search_places`, `lookup_weather`, `compute_routes`, ...) act on Maps Platform data,
+not the end user's personal Google account data.
+
+Not registered for this project (and therefore not usable) — checked twice, both times absent from
+the listing: Docs, Sheets, Slides, the universal "workspace" search server. Registered but
+intentionally not wired in (infra/ops, not relevant to a Chat business-user assistant): Compute,
+Cloud Run, Monitoring, Logging, Dataplex, Pub/Sub, Cloud Trace, Cloud Resource Manager, Vertex AI,
+AppTopology, SaaS Service Mgmt, BigQuery Data Transfer, BigQuery Migration, Agent Registry itself,
+Firestore.
 
 ### 4. `AgentRegistry`'s built-in header provider can't be async
 

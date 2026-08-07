@@ -31,7 +31,7 @@ PROJECT_NUM="$(gcloud projects describe "${PROJECT}" --format='value(projectNumb
 # it to false), so every MCP session attempts an mTLS channel that Cloud Run has
 # no client certificate for. It falls back correctly but logs a warning each
 # time and wastes an ADC lookup; set below in --set-env-vars.
-MCP_ENABLED="${GEMINI_ACT_MCP_ENABLED:-gmail,drive,calendar,chat,people}"
+MCP_ENABLED="${GEMINI_ACT_MCP_ENABLED:-gmail,drive,calendar,chat,people,bigquery,maps,storage}"
 
 : "${GEMINI_ACT_OAUTH_CLIENT_ID:?set GEMINI_ACT_OAUTH_CLIENT_ID}"
 : "${GEMINI_ACT_OAUTH_CLIENT_SECRET:?set GEMINI_ACT_OAUTH_CLIENT_SECRET}"

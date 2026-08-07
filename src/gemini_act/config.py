@@ -33,14 +33,18 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 # These values are therefore specific to the website-formare-ai project as
 # provisioned on 2026-08-07 — re-run the listing above and update this table if
 # ever pointed at a different GCP project. Only servers actually present in
-# Agent Registry for this project are listed; Docs/Sheets/Slides/the universal
-# "workspace" search server are not registered here and are omitted.
+# Agent Registry for this project are listed. Confirmed NOT registered here
+# (checked twice, both times absent from the listing): Docs, Sheets, Slides,
+# the universal "workspace" search server.
 MCP_SERVERS: dict[str, str] = {
     "gmail": "agentregistry-00000000-0000-0000-694e-6cd3d0570769",
     "drive": "agentregistry-00000000-0000-0000-1ac8-248c78d4ed27",
     "calendar": "agentregistry-00000000-0000-0000-16d6-cee169897afc",
     "chat": "agentregistry-00000000-0000-0000-263a-52b590fe274c",
     "people": "agentregistry-00000000-0000-0000-30c9-08a2641d3196",
+    "bigquery": "agentregistry-00000000-0000-0000-1169-26595affcf5c",
+    "maps": "agentregistry-00000000-0000-0000-087b-e3d7f8e1001a",
+    "storage": "agentregistry-00000000-0000-0000-2d58-34bf4b09480a",
 }
 
 # OAuth scopes requested from the end user, per MCP server. Taken from the
@@ -70,6 +74,19 @@ MCP_SCOPES: dict[str, tuple[str, ...]] = {
         "https://www.googleapis.com/auth/directory.readonly",
         "https://www.googleapis.com/auth/contacts.readonly",
     ),
+    # Verified against the BigQuery API discovery doc: jobs.query (which backs
+    # this server's execute_sql/execute_sql_readonly tools) only accepts
+    # bigquery / cloud-platform / cloud-platform.read-only — bigquery.readonly
+    # is not in that list, so it would not actually let the model run queries.
+    "bigquery": ("https://www.googleapis.com/auth/bigquery",),
+    # Maps' tools (search_places, lookup_weather, compute_routes, ...) act on
+    # Maps Platform/place data, not the end user's personal Google data — no
+    # extra scope observed to be needed beyond BASE_OAUTH_SCOPES' cloud-platform.
+    "maps": (),
+    # Verified against the Cloud Storage API discovery doc. read_only would be
+    # insufficient: this server's tools include create_bucket, write_text and
+    # delete_object, which need read_write.
+    "storage": ("https://www.googleapis.com/auth/devstorage.read_write",),
 }
 
 # Always requested.
@@ -138,6 +155,9 @@ class Settings(BaseSettings):
         "calendar",
         "chat",
         "people",
+        "bigquery",
+        "maps",
+        "storage",
     )
 
     # Agent run budget, seconds. Chat's own sync window is ~30s, but we answer
