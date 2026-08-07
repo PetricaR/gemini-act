@@ -69,14 +69,24 @@ curl -s -H "Authorization: Bearer ${TOKEN}" \
 The response's `error.details[].metadata.permission` gave the exact missing permission:
 **`agentregistry.mcpServers.get`**.
 
-**Fix:** granted via the IAM Policy Troubleshooter's Console UI (the "Grant access" flow), not via
-a hardcoded role name in this repo — the REST API (`roles:queryGrantableRoles`) doesn't yet
-recognize this resource type well enough to script the lookup reliably.
+It was granted through the Console UI first (`roles:queryGrantableRoles` doesn't yet recognize
+this resource type well enough to script the lookup), then confirmed and captured back afterward by
+reading the project's actual IAM policy:
 
-> **TODO:** the exact role name granted through the Console was never captured back into this repo
-> or into `deploy/setup_gcp.sh`. If this project's IAM ever needs to be rebuilt from scratch, redo
-> the Troubleshooter flow above for `gemini-act-runtime@website-formare-ai.iam.gserviceaccount.com`
-> and record the role name here.
+```bash
+curl -s -X POST -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  -H "Content-Type: application/json" \
+  "https://cloudresourcemanager.googleapis.com/v1/projects/website-formare-ai:getIamPolicy" \
+  | python3 -c "
+import json, sys
+for b in json.load(sys.stdin)['bindings']:
+    if any('gemini-act-runtime' in m for m in b['members']):
+        print(b['role'])
+"
+```
+
+**Fix:** `roles/agentregistry.viewer` on `gemini-act-runtime@website-formare-ai.iam.gserviceaccount.com`
+— now scripted in `deploy/setup_gcp.sh`'s IAM roles loop, no longer a manual step.
 
 ### 3. The registered resource **id** is not a slug — it's an opaque, auto-generated string
 
@@ -244,7 +254,8 @@ gcloud logging read \
   → `CachingToolset` (composition wrapper of any `BaseToolset`).
 - `pyproject.toml` / `uv.lock` — added `a2a`, `agent-identity` extras.
 - `deploy/setup_gcp.sh` — enables `agentregistry.googleapis.com`; drops the old per-product
-  Developer Preview service list; loads `.env`.
+  Developer Preview service list; loads `.env`; grants `roles/agentregistry.viewer` to the
+  runtime service account.
 - `deploy/deploy_cloud_run.sh` — `--source="${REPO_ROOT}"`; `.env` loading; default
   `mcp_enabled`/`location` fixed.
 - `.env`, `.env.example` — `GOOGLE_CLOUD_LOCATION=global`; `GEMINI_ACT_MCP_ENABLED` without `docs`.
@@ -254,9 +265,6 @@ gcloud logging read \
 
 ## Known gaps
 
-- The exact IAM role granted for `agentregistry.mcpServers.get` (see gotcha #2) was applied by
-  hand through the Console and never recorded. `setup_gcp.sh` still has a manual step instead of a
-  scripted `gcloud projects add-iam-policy-binding`.
 - `MCP_SERVERS` ids are hardcoded for `website-formare-ai`. Moving to a different GCP project means
   re-running the discovery `curl` in gotcha #3 and updating the table by hand — there's no dynamic
   lookup-by-`displayName` at runtime (a reasonable follow-up if this needs to become
