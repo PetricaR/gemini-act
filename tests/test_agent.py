@@ -7,7 +7,13 @@ from pydantic import ValidationError
 
 from gemini_act.agent.factory import build_agent
 from gemini_act.agent.tools import business, workspace_mcp
-from gemini_act.config import MCP_ENDPOINT_OVERRIDES, MCP_SCOPES, MCP_SERVERS, Settings
+from gemini_act.config import (
+    MCP_ENDPOINT_OVERRIDES,
+    MCP_SCOPES,
+    MCP_SERVERS,
+    THINKING_LEVELS,
+    Settings,
+)
 
 
 def _settings(**overrides) -> Settings:
@@ -71,6 +77,25 @@ def test_unknown_mcp_server_is_rejected_at_startup():
         _settings(mcp_enabled="gmail,teleportation")
 
 
+def test_thinking_level_is_case_insensitive():
+    assert _settings(thinking_level="low").thinking_level == "LOW"
+
+
+def test_unknown_thinking_level_is_rejected_at_startup():
+    """A typo must fail here, not mid-turn as a generic "unexpected error"."""
+    with pytest.raises(ValidationError, match="Unknown thinking level"):
+        _settings(thinking_level="ludicrous")
+
+
+def test_every_thinking_level_maps_onto_the_genai_enum():
+    """The strings in config are converted to types.ThinkingLevel unchecked, so
+    a value accepted at startup must exist in the enum."""
+    from google.genai import types
+
+    for level in THINKING_LEVELS:
+        assert types.ThinkingLevel(level)
+
+
 def test_every_server_has_declared_scopes():
     assert set(MCP_SERVERS) == set(MCP_SCOPES)
 
@@ -83,6 +108,24 @@ def test_oauth_scopes_cover_enabled_servers_without_duplicates():
 
 
 # --- agent assembly ---
+
+
+def test_thinking_level_reaches_the_generation_config():
+    """Gemini 3.x thinks on every LLM call, several per turn, so this setting is
+    the largest single factor in how long a Chat user waits for a reply."""
+    from google.genai import types
+
+    agent = build_agent(_settings(thinking_level="LOW"), token_service=None)
+    config = agent.generate_content_config
+    assert config is not None
+    assert config.thinking_config.thinking_level is types.ThinkingLevel.LOW
+
+
+def test_empty_thinking_level_leaves_the_model_default_alone():
+    """ADK substitutes an empty GenerateContentConfig for the None we pass, so
+    the thing to assert is the absence of thinking_config, not of the config."""
+    agent = build_agent(_settings(thinking_level=""), token_service=None)
+    assert agent.generate_content_config.thinking_config is None
 
 
 def test_anonymous_agent_omits_workspace_toolsets():

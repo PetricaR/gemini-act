@@ -31,7 +31,15 @@ PROJECT_NUM="$(gcloud projects describe "${PROJECT}" --format='value(projectNumb
 # it to false), so every MCP session attempts an mTLS channel that Cloud Run has
 # no client certificate for. It falls back correctly but logs a warning each
 # time and wastes an ADC lookup; set below in --set-env-vars.
-MCP_ENABLED="${GEMINI_ACT_MCP_ENABLED:-gmail,drive,calendar,chat,people,bigquery,maps,storage}"
+MCP_ENABLED="${GEMINI_ACT_MCP_ENABLED:-gmail,drive,calendar}"
+THINKING_LEVEL="${GEMINI_ACT_THINKING_LEVEL:-LOW}"
+# Keep one instance warm. Scale-to-zero is expensive here in a way it is not for
+# an ordinary service: CachingToolset holds its tool list in process memory, so
+# a cold instance re-runs `tools/list` against every enabled MCP server before
+# it can answer anything — 15-25s each (see agent/tools/caching_toolset.py).
+# The first message after any idle period paid that. Set to 0 to trade the idle
+# instance's cost back for that latency.
+MIN_INSTANCES="${CLOUD_RUN_MIN_INSTANCES:-1}"
 
 : "${GEMINI_ACT_OAUTH_CLIENT_ID:?set GEMINI_ACT_OAUTH_CLIENT_ID}"
 : "${GEMINI_ACT_OAUTH_CLIENT_SECRET:?set GEMINI_ACT_OAUTH_CLIENT_SECRET}"
@@ -62,7 +70,8 @@ gcloud run deploy "${SERVICE}" \
   --cpu=4 \
   --timeout=300 \
   --no-cpu-throttling \
-  --set-env-vars="^##^GOOGLE_CLOUD_PROJECT=${PROJECT}##GOOGLE_CLOUD_LOCATION=${VERTEX_LOCATION}##GOOGLE_GENAI_USE_VERTEXAI=TRUE##GEMINI_ACT_MODEL=${MODEL}##GEMINI_ACT_MCP_ENABLED=${MCP_ENABLED}##GEMINI_ACT_TOKEN_STORE=firestore##GEMINI_ACT_PROJECT_NUMBER=${PROJECT_NUM}##GOOGLE_API_USE_CLIENT_CERTIFICATE=false" \
+  --min-instances="${MIN_INSTANCES}" \
+  --set-env-vars="^##^GOOGLE_CLOUD_PROJECT=${PROJECT}##GOOGLE_CLOUD_LOCATION=${VERTEX_LOCATION}##GOOGLE_GENAI_USE_VERTEXAI=TRUE##GEMINI_ACT_MODEL=${MODEL}##GEMINI_ACT_THINKING_LEVEL=${THINKING_LEVEL}##GEMINI_ACT_MCP_ENABLED=${MCP_ENABLED}##GEMINI_ACT_TOKEN_STORE=firestore##GEMINI_ACT_PROJECT_NUMBER=${PROJECT_NUM}##GOOGLE_API_USE_CLIENT_CERTIFICATE=false" \
   --quiet
 
 # Cloud Run exposes two hostnames (a legacy hashed one and the canonical

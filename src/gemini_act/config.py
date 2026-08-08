@@ -158,6 +158,12 @@ BASE_OAUTH_SCOPES: tuple[str, ...] = (
 # Scope the app itself uses to post messages as the Chat app (service account).
 CHAT_BOT_SCOPE = "https://www.googleapis.com/auth/chat.bot"
 
+# Accepted values for `Settings.thinking_level`, mirroring
+# google.genai.types.ThinkingLevel minus its UNSPECIFIED placeholder. Kept as
+# plain strings so this module stays free of a genai import; the conversion to
+# the enum happens in `agent/factory.py`.
+THINKING_LEVELS: frozenset[str] = frozenset({"MINIMAL", "LOW", "MEDIUM", "HIGH"})
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -174,6 +180,17 @@ class Settings(BaseSettings):
     # independent of the Cloud Run region and of where Firestore lives.
     location: str = Field(default="global", alias="GOOGLE_CLOUD_LOCATION")
     model: str = "gemini-3.6-flash"
+    # How hard the model thinks before it answers. This is the single largest
+    # lever on how long a user waits: Gemini 3.x thinks on *every* LLM call, and
+    # one turn that uses tools is several of those, so the cost is paid three to
+    # five times per reply — not once.
+    #
+    # LOW still plans multi-step tool use correctly while cutting most of that
+    # latency. MINIMAL is faster again but starts fumbling anything needing more
+    # than one tool call. Raise to MEDIUM/HIGH if answers turn shallow; an empty
+    # value leaves the model's own default in place (which is what this service
+    # ran with before, and why replies took as long as they did).
+    thinking_level: str = "LOW"
 
     # Chat webhook
     chat_audience: str = ""
@@ -252,6 +269,24 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return tuple(part.strip() for part in value.split(",") if part.strip())
         return value
+
+    @field_validator("thinking_level", mode="before")
+    @classmethod
+    def _normalise_thinking_level(cls, value: object) -> object:
+        """Accept `low`/`Low`/`LOW`, and fail at startup on a typo.
+
+        An unrecognised level would otherwise raise deep inside the first agent
+        turn, surfacing to the user as a generic "unexpected error".
+        """
+        if not isinstance(value, str):
+            return value
+        level = value.strip().upper()
+        if level and level not in THINKING_LEVELS:
+            raise ValueError(
+                f"Unknown thinking level: {value}. Known: {', '.join(sorted(THINKING_LEVELS))} "
+                "(or empty to use the model default)"
+            )
+        return level
 
     @field_validator("mcp_enabled", mode="after")
     @classmethod

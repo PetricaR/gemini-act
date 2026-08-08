@@ -7,6 +7,7 @@ from functools import lru_cache
 from typing import Any
 
 from google.adk import Agent
+from google.genai import types
 
 from gemini_act.agent.prompts import build_instruction
 from gemini_act.agent.tools import (
@@ -20,6 +21,22 @@ from gemini_act.mcp.store import McpRegistry
 from gemini_act.oauth.store import TokenService
 
 logger = logging.getLogger(__name__)
+
+
+def build_generate_content_config(settings: Settings) -> types.GenerateContentConfig | None:
+    """Model-level generation settings, or None to keep ADK's own defaults.
+
+    Only thinking is pinned here — see `Settings.thinking_level` for why it is
+    worth pinning at all. Everything else is deliberately left to ADK so this
+    does not quietly diverge from the library's defaults.
+    """
+    if not settings.thinking_level:
+        return None
+    return types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(
+            thinking_level=types.ThinkingLevel(settings.thinking_level)
+        )
+    )
 
 
 def build_agent(
@@ -48,9 +65,10 @@ def build_agent(
         tools.append(CustomMcpToolset(mcp_registry, settings))
 
     logger.info(
-        "Built agent on %s with %d tool group(s), workspace access %s",
+        "Built agent on %s with %d tool group(s), thinking %s, workspace access %s",
         settings.model,
         len(tools),
+        settings.thinking_level or "default",
         "on" if token_service else "off",
     )
     return Agent(
@@ -59,6 +77,7 @@ def build_agent(
         description="Takes actions in Google Workspace on behalf of a Google Chat user.",
         instruction=build_instruction,
         tools=tools,
+        generate_content_config=build_generate_content_config(settings),
     )
 
 
