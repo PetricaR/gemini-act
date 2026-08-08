@@ -239,6 +239,27 @@ async def test_no_message_and_no_attachments_still_produces_a_content_part(fake_
     assert fake.new_message.parts == [types.Part(text="")]
 
 
+# --- GFM habits are rewritten into Chat's own markup before display ---
+
+
+async def test_the_final_answer_is_rewritten_into_chat_markup(fake_runner):
+    fake_runner([_event("This is **important**.")])
+    assert await runner_module.run_agent("users/1", "s", "hi") == "This is *important*."
+
+
+async def test_streamed_updates_are_rewritten_on_every_push(streamed):
+    """Not just the final message — the in-progress text shown while the model
+    is still writing must never flash raw Markdown at the reader either."""
+    seen, _ = await streamed(
+        [
+            _event("This is **impor", partial=True),
+            _event("This is **important**.", partial=False),
+        ]
+    )
+    assert seen[0] == "This is **impor", "an unclosed marker mid-stream is left alone, not eaten"
+    assert seen[-1] == "This is *important*."
+
+
 # --- LiveReply ---
 
 

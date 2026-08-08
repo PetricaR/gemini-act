@@ -14,6 +14,7 @@ from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 
 from gemini_act.agent.factory import get_agent
+from gemini_act.chat.formatting import to_chat_markup
 from gemini_act.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -149,14 +150,18 @@ async def run_agent(
             text = _event_text(event)
             if event.partial:
                 if text and on_progress:
+                    # Accumulated raw, converted only for display: a `**`
+                    # opened in one delta and closed in the next would not
+                    # convert correctly if each fragment were rewritten in
+                    # isolation before being joined.
                     streamed += text
-                    await on_progress(streamed)
+                    await on_progress(to_chat_markup(streamed))
                 continue
             if event.is_final_response() and text.strip():
                 # A turn that calls tools produces several of these — a remark
                 # before the tool call, then the real answer. The last one wins,
                 # but each is shown as it lands so the wait is not silent.
-                final = text + _format_citations(event.grounding_metadata)
+                final = to_chat_markup(text) + _format_citations(event.grounding_metadata)
                 streamed = ""
                 if on_progress:
                     await on_progress(final)
