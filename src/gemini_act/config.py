@@ -233,6 +233,14 @@ class Settings(BaseSettings):
     # force onto the critical path.
     chat_attachment_max_count: int = 5
 
+    # A small subset of Google's A2UI protocol, rendered onto Cards v2, that
+    # lets the model attach buttons/images/layout to an answer instead of only
+    # text — see `chat/a2ui.py`. Off makes the app show the spoken part of the
+    # answer and silently ignore any UI payload the model still writes, rather
+    # than parsing or rendering it (the system instruction still describes the
+    # capability either way, same as the attachments flag above).
+    chat_a2ui_enabled: bool = True
+
     # OAuth
     oauth_client_id: str = ""
     oauth_client_secret: str = ""

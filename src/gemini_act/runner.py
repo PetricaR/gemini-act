@@ -14,6 +14,7 @@ from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 
 from gemini_act.agent.factory import get_agent
+from gemini_act.chat.a2ui import MARKER, split_a2ui
 from gemini_act.chat.formatting import to_chat_markup
 from gemini_act.config import get_settings
 
@@ -153,18 +154,28 @@ async def run_agent(
                     # Accumulated raw, converted only for display: a `**`
                     # opened in one delta and closed in the next would not
                     # convert correctly if each fragment were rewritten in
-                    # isolation before being joined.
+                    # isolation before being joined. `split_a2ui` similarly
+                    # keeps a UI payload's marker (and the JSON growing after
+                    # it) out of the live preview — there is nothing useful to
+                    # show of it until the turn is done and `events.py` can
+                    # parse and render the whole thing.
                     streamed += text
-                    await on_progress(to_chat_markup(streamed))
+                    spoken, _ = split_a2ui(streamed)
+                    await on_progress(to_chat_markup(spoken))
                 continue
             if event.is_final_response() and text.strip():
                 # A turn that calls tools produces several of these — a remark
                 # before the tool call, then the real answer. The last one wins,
                 # but each is shown as it lands so the wait is not silent.
-                final = to_chat_markup(text) + _format_citations(event.grounding_metadata)
+                spoken, raw_a2ui = split_a2ui(text)
+                display = to_chat_markup(spoken) + _format_citations(event.grounding_metadata)
+                # The marker and its JSON ride along in the *returned* string
+                # for `events.py` to split back out and render — but never in
+                # what `on_progress` shows, which is display text only.
+                final = display + (f"\n\n{MARKER}\n{raw_a2ui}" if raw_a2ui else "")
                 streamed = ""
                 if on_progress:
-                    await on_progress(final)
+                    await on_progress(display)
         return final
 
     result = await asyncio.wait_for(_run(), timeout=settings.agent_timeout_seconds)

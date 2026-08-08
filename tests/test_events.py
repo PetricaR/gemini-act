@@ -181,6 +181,38 @@ def test_parse_event_defaults_to_no_attachments():
     assert events.parse_event(message_event("hello")).attachments == ()
 
 
+def card_clicked_event(invoked_function: str = "", parameters: dict | None = None) -> dict:
+    """A button rendered from an A2UI payload (see chat/a2ui.py) being clicked —
+    the classic Chat app shape, `Event.common`, per Google's own reference."""
+    event = {
+        "type": "CARD_CLICKED",
+        "user": {"name": "users/123", "displayName": "Ada"},
+        "space": {"name": "spaces/AAA", "type": "DM"},
+        "message": {
+            "name": "spaces/AAA/messages/BBB",
+            "space": {"name": "spaces/AAA", "type": "DM"},
+        },
+    }
+    if invoked_function:
+        event["common"] = {"invokedFunction": invoked_function, "parameters": parameters or {}}
+    return event
+
+
+def test_parse_event_synthesizes_text_from_a_card_click():
+    ctx = events.parse_event(card_clicked_event("confirm_delete", {"event_id": "abc"}))
+    assert ctx.command is None
+    assert "confirm_delete" in ctx.text
+    assert "event_id=abc" in ctx.text
+
+
+def test_a_typed_message_is_never_overridden_by_a_stray_common_field():
+    """A click's synthesized text must only ever fill in for a genuinely empty
+    message — never shadow real text the user typed."""
+    event = message_event("what's on my calendar")
+    event["common"] = {"invokedFunction": "should_be_ignored"}
+    assert events.parse_event(event).text == "what's on my calendar"
+
+
 def test_command_recognised_by_id():
     assert events.parse_event(message_event("/help", command_id="1")).command == "help"
 
@@ -224,6 +256,28 @@ async def test_authorized_user_schedules_agent_run(authorized, monkeypatch):
     fn, (ctx,) = scheduler.calls[0]
     assert fn is events.run_and_reply
     assert ctx.text == "find my budget doc"
+
+
+async def test_a_card_click_reaches_the_agent_like_an_ordinary_message(authorized, monkeypatch):
+    await authorized()
+    scheduler = Scheduler()
+
+    response = await events.handle_event(
+        card_clicked_event("confirm_delete", {"event_id": "abc"}), scheduler
+    )
+
+    assert response == {}
+    fn, (ctx,) = scheduler.calls[0]
+    assert fn is events.run_and_reply
+    assert "confirm_delete" in ctx.text
+
+
+async def test_a_card_click_with_no_function_asks_for_something(token_service, monkeypatch):
+    """Defensive fallback: a click that carried no usable data degrades like
+    any other empty message, rather than running the agent on nothing."""
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    response = await events.handle_event(card_clicked_event(), Scheduler())
+    assert "Say something" in response["text"]
 
 
 async def test_an_attachment_only_message_still_reaches_the_agent(authorized, monkeypatch):
@@ -612,6 +666,80 @@ async def test_run_and_reply_skips_resolution_without_attachments(monkeypatch):
     await events.run_and_reply(events.parse_event(message_event("hello")))
 
     assert seen["attachments"] == []
+
+
+# --- rendering an A2UI payload the model attached to its answer ---
+
+
+def _a2ui_answer(spoken: str, components: list[dict]) -> str:
+    import json
+
+    from gemini_act.chat.a2ui import MARKER
+
+    return f"{spoken}\n\n{MARKER}\n{json.dumps({'components': components})}"
+
+
+async def test_run_and_reply_renders_an_a2ui_payload_into_a_card(monkeypatch):
+    _reply_settings(monkeypatch)
+    client = _recording_client(monkeypatch)
+    answer = _a2ui_answer(
+        "Here's what I found.",
+        [{"id": "root", "component": "Text", "text": "Q3 report"}],
+    )
+
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
+        return answer
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    await events.run_and_reply(events.parse_event(message_event("show me the report")))
+
+    delivered = client.delivered
+    assert delivered["text"] == "Here's what I found."
+    assert delivered["cardsV2"][0]["card"]["sections"][0]["widgets"] == [
+        {"textParagraph": {"text": "Q3 report"}}
+    ]
+
+
+async def test_run_and_reply_falls_back_to_plain_text_on_malformed_a2ui(monkeypatch):
+    """A broken attempt at rich UI must never leak the raw JSON into the chat."""
+    _reply_settings(monkeypatch)
+    client = _recording_client(monkeypatch)
+    from gemini_act.chat.a2ui import MARKER
+
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
+        return f"Here's what I found.\n\n{MARKER}\n{{not valid json"
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    await events.run_and_reply(events.parse_event(message_event("show me the report")))
+
+    delivered = client.delivered
+    assert delivered["text"] == "Here's what I found."
+    assert "cardsV2" not in delivered
+    assert "not valid json" not in str(delivered)
+
+
+async def test_a2ui_rendering_can_be_turned_off(monkeypatch):
+    client = _recording_client(monkeypatch)
+    monkeypatch.setattr(
+        events,
+        "get_settings",
+        lambda: Settings(chat_a2ui_enabled=False, chat_stream_interval_seconds=0.0),
+    )
+    components = [{"id": "root", "component": "Text", "text": "x"}]
+    answer = _a2ui_answer("Here's what I found.", components)
+
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
+        return answer
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    await events.run_and_reply(events.parse_event(message_event("show me the report")))
+
+    delivered = client.delivered
+    assert delivered["text"] == "Here's what I found."
+    assert "cardsV2" not in delivered
 
 
 # --- streaming the reply ---

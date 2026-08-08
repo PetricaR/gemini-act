@@ -15,6 +15,17 @@ def text_message(text: str) -> dict[str, Any]:
     return {"text": text}
 
 
+def a2ui_message(text: str, widgets: list[dict[str, Any]]) -> dict[str, Any]:
+    """A reply with rich content the model asked for, alongside its spoken
+    text — see `chat/a2ui.py`. No app header: unlike the cards below, this
+    accompanies an ordinary conversational answer rather than standing in for
+    one, and Chat already shows the app's own name and avatar on the message."""
+    return {
+        "text": text,
+        "cardsV2": [{"cardId": "a2ui", "card": {"sections": [{"widgets": widgets}]}}],
+    }
+
+
 def _card(card_id: str, sections: list[dict[str, Any]], subtitle: str = "") -> dict[str, Any]:
     header: dict[str, Any] = {"title": APP_TITLE}
     if subtitle:

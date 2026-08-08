@@ -10,6 +10,7 @@ from google.genai import types
 
 from gemini_act.agent.tools import probe_server
 from gemini_act.chat import cards
+from gemini_act.chat.a2ui import parse_a2ui, render_a2ui, split_a2ui
 from gemini_act.chat.attachments import resolve_attachments
 from gemini_act.chat.client import get_chat_client
 from gemini_act.chat.live_reply import PLACEHOLDER, LiveReply
@@ -90,6 +91,16 @@ def normalize_event(event: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         }
         if "appCommandMetadata" in payload:
             normalized["appCommandMetadata"] = payload["appCommandMetadata"]
+        # Only verified for the classic payload shape (Chat API `Event.common`,
+        # https://developers.google.com/workspace/chat/api/reference/rest/v1/Event):
+        # `invokedFunction`/`parameters` from a button click. Whether — and
+        # where — an add-on `buttonClickedPayload` carries the equivalent is
+        # unconfirmed; passed through if present rather than assumed absent,
+        # so `parse_event`'s click handling picks it up either way.
+        if "common" in payload:
+            normalized["common"] = payload["common"]
+        elif "common" in chat:
+            normalized["common"] = chat["common"]
         return normalized, True
 
     logger.warning("Add-on event carried no recognised payload: %s", sorted(chat))
@@ -156,6 +167,20 @@ def parse_event(event: dict[str, Any]) -> ChatContext:
     # to the raw text for events that do not provide it.
     text = (message.get("argumentText") or message.get("text") or "").strip()
 
+    # A CARD_CLICKED event (a button rendered from an A2UI payload, see
+    # chat/a2ui.py) carries no message text of its own — the click itself is
+    # the input. Describing it as a message lets it ride the exact same path
+    # as an ordinary question below, rather than needing a parallel one.
+    if not text:
+        common = event.get("common") or {}
+        invoked_function = common.get("invokedFunction") or ""
+        if invoked_function:
+            parameters = common.get("parameters") or {}
+            detail = ", ".join(f"{key}={value}" for key, value in parameters.items())
+            text = f'[The user clicked "{invoked_function}"' + (
+                f" with {detail}]" if detail else "]"
+            )
+
     # Google Chat has three overlapping signals for "this is a 1:1 with the
     # bot", spread across API versions and payload shapes: the deprecated
     # `type: "DM"`, its replacement `spaceType: "DIRECT_MESSAGE"`, and the
@@ -216,7 +241,11 @@ async def _handle_normalized(event: dict[str, Any], schedule) -> dict[str, Any]:
     if event_type in {"REMOVED_FROM_SPACE", "APP_REMOVED_FROM_SPACE"}:
         return {}
 
-    if event_type not in {"MESSAGE", "APP_COMMAND"}:
+    # CARD_CLICKED: a button rendered from an A2UI payload was clicked.
+    # `parse_event` turns the click into a synthetic message describing it
+    # (see there), so from this point on it is indistinguishable from an
+    # ordinary typed message and needs no separate handling below.
+    if event_type not in {"MESSAGE", "APP_COMMAND", "CARD_CLICKED"}:
         logger.info("Ignoring unhandled event type %s", event_type)
         return {}
 
@@ -495,6 +524,24 @@ async def _resolve_attachments(ctx: ChatContext) -> list[types.Part]:
     return parts
 
 
+def _build_reply_body(answer: str) -> dict[str, Any]:
+    """The final answer, plus a rendered card if the model attached an A2UI
+    payload — see `chat/a2ui.py`. Falls back to the spoken text alone (the
+    marker and JSON always stripped out either way) if there was no payload,
+    it did not parse, or nothing in it was usable — a malformed attempt at
+    rich UI must never surface as raw JSON in the chat."""
+    spoken, raw_a2ui = split_a2ui(answer)
+    if not raw_a2ui or not get_settings().chat_a2ui_enabled:
+        return cards.text_message(spoken)
+
+    payload = parse_a2ui(raw_a2ui)
+    widgets = render_a2ui(payload) if payload is not None else None
+    if not widgets:
+        logger.warning("Discarding unusable A2UI payload: %s", raw_a2ui[:200])
+        return cards.text_message(spoken)
+    return cards.a2ui_message(spoken, widgets)
+
+
 async def run_and_reply(ctx: ChatContext) -> None:
     """Run the agent and show its answer being written.
 
@@ -517,7 +564,7 @@ async def run_and_reply(ctx: ChatContext) -> None:
             on_progress=reply.push if reply.is_live else None,
             attachments=attachment_parts,
         )
-        body = cards.text_message(answer)
+        body = _build_reply_body(answer)
     except TimeoutError:
         logger.warning("Agent timed out for %s in %s", ctx.user_id, ctx.space)
         body = cards.error_card("That took too long and I stopped. Try narrowing the request.")

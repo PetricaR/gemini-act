@@ -10,7 +10,10 @@ requests interleave on a single connection.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
+import googleapiclient
+import httplib2
 import pytest
 
 from gemini_act.chat.client import ChatClient
@@ -135,6 +138,63 @@ async def test_download_attachment_uses_the_media_download_method(client):
     assert service.calls[0]["kind"] == "download_media"
     assert service.calls[0]["resourceName"] == "spaces/AAA/messages/BBB/attachments/CCC"
     assert service.calls[0]["http"] is not None, "its own transport, like every other call"
+
+
+class _FakeHttpTransport:
+    """An httplib2-shaped transport: `.request(uri, method, body, headers)`
+    returning `(response, content)`, the interface `HttpRequest.execute`
+    actually calls. Unlike `FakeService` above (which stubs out
+    `googleapiclient` entirely), this drives the *real* Chat API resource
+    built from the API's own discovery document — so it catches a mistake
+    `FakeService` structurally cannot: a method name that does not exist, or
+    a URL/verb the real client would not actually produce."""
+
+    def __init__(self, content: bytes, status: int = 200) -> None:
+        self.content = content
+        self.status = status
+        self.calls: list[dict] = []
+
+    def request(self, uri, method="GET", body=None, headers=None, **kwargs):
+        self.calls.append({"uri": uri, "method": method})
+        return httplib2.Response({"status": self.status}), self.content
+
+
+async def test_download_attachment_against_the_real_generated_client():
+    """`ChatClient.download_attachment` calls `media().download_media()`,
+    which only exists because the Chat API's discovery document flags
+    `media.download` as `supportsMediaDownload` — a detail easy to get wrong
+    (e.g. by calling the plain `download()`, which tries to JSON-decode raw
+    file bytes and would break on every real attachment) without ever
+    failing against a hand-rolled fake. Building the service from the real
+    discovery document, and only faking the HTTP transport underneath it,
+    verifies the actual request shape: GET, `?alt=media`, raw bytes back."""
+    import json
+
+    from googleapiclient.discovery import build_from_document
+
+    discovery_path = (
+        Path(googleapiclient.__file__).parent
+        / "discovery_cache"
+        / "documents"
+        / "chat.v1.json"
+    )
+    document = json.loads(discovery_path.read_text())
+    service = build_from_document(document, credentials=None)
+
+    chat = ChatClient()
+    chat._service = service
+    chat._credentials = object()
+    transport = _FakeHttpTransport(content=b"\x89PNG raw bytes, not json")
+    chat._new_http = lambda: transport  # bypass AuthorizedHttp wrapping; irrelevant here
+
+    result = await chat.download_attachment("spaces/AAA/messages/BBB/attachments/CCC")
+
+    assert result == b"\x89PNG raw bytes, not json", "MediaModel must hand back raw bytes"
+    assert transport.calls[0]["method"] == "GET"
+    assert transport.calls[0]["uri"] == (
+        "https://chat.googleapis.com/v1/media/"
+        "spaces/AAA/messages/BBB/attachments/CCC?alt=media"
+    )
 
 
 async def test_an_app_identity_delete_uses_a_private_transport(client):

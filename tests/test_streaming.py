@@ -260,6 +260,39 @@ async def test_streamed_updates_are_rewritten_on_every_push(streamed):
     assert seen[-1] == "This is *important*."
 
 
+# --- an A2UI payload rides along in the return value, never in on_progress ---
+
+
+async def test_an_a2ui_payload_is_kept_out_of_every_progress_update(streamed):
+    """`events.py` needs the raw marker and JSON to render a card, but nothing
+    shown live while the model is still writing should ever include it — there
+    is nothing useful to show of a card that has not finished arriving."""
+    from gemini_act.chat.a2ui import MARKER
+
+    seen, result = await streamed(
+        [
+            _event("Here you go.\n\n---a2ui_J", partial=True),
+            _event(f"Here you go.\n\n{MARKER}\n" + '{"components": [', partial=True),
+            _event(f'Here you go.\n\n{MARKER}\n{{"components": []}}', partial=False),
+        ]
+    )
+    assert all(MARKER not in text for text in seen), "the marker must never reach on_progress"
+    assert all("components" not in text for text in seen)
+    assert seen[-1] == "Here you go."
+    assert MARKER in result, "but the final return value keeps it, for events.py to render"
+    assert result.endswith('{"components": []}')
+
+
+async def test_an_a2ui_payload_survives_being_returned_unstreamed(fake_runner):
+    """Same guarantee without streaming: `run_and_reply` always calls
+    `split_a2ui` on whatever `run_agent` returns, streamed or not."""
+    from gemini_act.chat.a2ui import MARKER
+
+    fake_runner([_event(f'Here you go.\n\n{MARKER}\n{{"components": []}}')])
+    result = await runner_module.run_agent("users/1", "s", "hi")
+    assert result == f'Here you go.\n\n{MARKER}\n{{"components": []}}'
+
+
 # --- LiveReply ---
 
 
