@@ -55,18 +55,31 @@ for real internal integrations:
   system (currently a two-row stub: one `store`, one `product`).
 - **`summarize_numbers(values, label)`** — count/total/mean/min/max over a list of numbers.
 
-## Web search (always available, no auth needed)
+## Web search and page reading (always available, no auth needed)
 
-Google Search grounding — the model's own built-in web search, for questions that fall
-outside Workspace and the business tools (current events, public facts, anything not in the
-user's own data). Wired in [`agent/tools/search.py`](../src/gemini_act/agent/tools/search.py)
-as `GoogleSearchTool(bypass_multi_tools_limit=True)`, ADK's documented way to combine it with
-other tools: Gemini's built-in `google_search` cannot share a request with custom
-function-declaration tools, so ADK runs it inside its own single-tool sub-agent and exposes
-that sub-agent to the root agent as an ordinary callable tool (`google_search_agent`). Needs
-no per-user OAuth — it is a model-native capability, not a Workspace call — but each search
-adds an LLM round trip and is billed separately on Vertex AI, so it is a toggle
-(`Settings.web_search_enabled`, default on) rather than an always-on business tool.
+Two of the model's own built-in tools, for questions that fall outside Workspace and the
+business tools: `google_search` (current events, public facts, anything not in the user's own
+data) and `url_context`, which fetches and reads the full content of a specific URL — a search
+result, a link the user pasted, documentation — when a search snippet is not enough. The two
+combine freely in the same call: search, then read the most relevant result in depth.
+
+Wired in [`agent/tools/search.py`](../src/gemini_act/agent/tools/search.py). Neither is a
+regular function tool, and Gemini's standard API will not let a built-in tool share a request
+with custom function-declaration tools (Workspace MCP, business tools, custom MCP) — though it
+does allow several built-in tools to share a request with *each other*. So both are wrapped
+together in one single-purpose sub-agent and exposed to the root agent as one ordinary callable
+tool (`google_search_agent`) — the same pattern ADK applies automatically for `google_search`
+alone via `bypass_multi_tools_limit`, done by hand here since `url_context` has no such built-in
+shortcut. The sub-agent keeps that name (rather than something url_context-inclusive) because
+ADK's grounding-metadata propagation looks for a tool named exactly `google_search_agent` to
+carry citations onto the root agent's reply — renaming it would silently drop them.
+
+Needs no per-user OAuth — these are model-native capabilities, not Workspace calls — but each
+call adds an LLM round trip and is billed separately on Vertex AI, so it is a toggle
+(`Settings.web_search_enabled`, default on) rather than an always-on business tool. `url_context`
+cannot fetch paywalled pages, YouTube, Google Workspace files, or anything not publicly
+reachable (no localhost/private networks), and is capped at 20 URLs and 34MB per URL in a
+single call.
 
 Grounding with Google Search requires showing where a grounded answer came from. Google's own
 docs point to rendering `search_entry_point.rendered_content`, an HTML widget meant for a web

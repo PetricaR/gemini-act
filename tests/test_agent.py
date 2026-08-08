@@ -237,10 +237,25 @@ def test_every_business_tool_documents_itself():
 def test_search_tool_present_by_default():
     tools = search.build_search_tools(_settings())
     assert len(tools) == 1
-    assert tools[0].bypass_multi_tools_limit, (
-        "must be wrapped as a sub-agent tool, or it breaks any turn that also "
-        "uses a business/Workspace/custom-MCP tool"
+    assert tools[0].name == "google_search_agent", (
+        "the exact name ADK's grounding-metadata propagation looks for — "
+        "renaming it would silently drop citations, see runner.py"
     )
+    assert tools[0].propagate_grounding_metadata, (
+        "without this, citations never reach the root agent's reply event"
+    )
+
+
+def test_search_tool_wraps_both_search_and_url_reading():
+    """Both are built-in Gemini tools that can't share a request with the
+    business/Workspace/custom-MCP tools, so both must live inside the same
+    sub-agent — wrapping only one would leave the other unusable."""
+    from google.adk.tools.google_search_tool import GoogleSearchTool
+    from google.adk.tools.url_context_tool import UrlContextTool
+
+    inner_tools = search.build_search_tools(_settings())[0].agent.tools
+    assert any(isinstance(t, GoogleSearchTool) for t in inner_tools)
+    assert any(isinstance(t, UrlContextTool) for t in inner_tools)
 
 
 def test_search_tool_omitted_when_disabled():

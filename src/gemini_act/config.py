@@ -231,11 +231,11 @@ class Settings(BaseSettings):
     firestore_mcp_collection: str = "gemini_act_mcp_servers"
     session_db_url: str = ""
 
-    # Google Search grounding (see `agent/tools/search.py`). Needs no per-user
-    # OAuth — it is a model-native capability, not a Workspace call — but each
-    # search is billed separately on Vertex AI and costs an extra LLM round
-    # trip (it runs as its own sub-agent), so it is a toggle like the servers
-    # below rather than an always-on business tool.
+    # Google Search grounding plus URL reading (see `agent/tools/search.py`).
+    # Needs no per-user OAuth — both are model-native capabilities, not
+    # Workspace calls — but each call is billed separately on Vertex AI and
+    # costs an extra LLM round trip (it runs as its own sub-agent), so it is a
+    # toggle like the servers below rather than an always-on business tool.
     web_search_enabled: bool = True
 
     # User-connected MCP servers: paste a server URL (or a client's JSON config
