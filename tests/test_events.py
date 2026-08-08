@@ -12,7 +12,12 @@ from gemini_act.oauth.store import StoredToken, TokenService
 
 
 def message_event(
-    text: str = "hello", *, command_id: str = "", thread: str = "t1", space_type: str = "DM"
+    text: str = "hello",
+    *,
+    command_id: str = "",
+    thread: str = "t1",
+    space_type: str = "DM",
+    attachment: list[dict] | None = None,
 ) -> dict:
     message: dict = {
         "name": "spaces/AAA/messages/BBB",
@@ -24,6 +29,8 @@ def message_event(
     }
     if command_id:
         message["slashCommand"] = {"commandId": command_id}
+    if attachment is not None:
+        message["attachment"] = attachment
     return {
         "type": "MESSAGE",
         "message": message,
@@ -156,6 +163,24 @@ def test_group_chat_space_type_is_not_a_dm():
     assert ctx.thread_key is None
 
 
+def _attachment(name: str = "photo.png") -> dict:
+    return {
+        "contentName": name,
+        "contentType": "image/png",
+        "source": "UPLOADED_CONTENT",
+        "attachmentDataRef": {"resourceName": "spaces/AAA/messages/BBB/attachments/CCC"},
+    }
+
+
+def test_parse_event_extracts_attachments():
+    ctx = events.parse_event(message_event("check this out", attachment=[_attachment()]))
+    assert ctx.attachments == (_attachment(),)
+
+
+def test_parse_event_defaults_to_no_attachments():
+    assert events.parse_event(message_event("hello")).attachments == ()
+
+
 def test_command_recognised_by_id():
     assert events.parse_event(message_event("/help", command_id="1")).command == "help"
 
@@ -199,6 +224,34 @@ async def test_authorized_user_schedules_agent_run(authorized, monkeypatch):
     fn, (ctx,) = scheduler.calls[0]
     assert fn is events.run_and_reply
     assert ctx.text == "find my budget doc"
+
+
+async def test_an_attachment_only_message_still_reaches_the_agent(authorized, monkeypatch):
+    """A bare file with no caption is a real request, not nothing to do."""
+    await authorized()
+    scheduler = Scheduler()
+
+    response = await events.handle_event(message_event("", attachment=[_attachment()]), scheduler)
+
+    assert response == {}
+    assert scheduler.calls and scheduler.calls[0][0] is events.run_and_reply
+
+
+async def test_a_truly_empty_message_asks_for_something(token_service, monkeypatch):
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    response = await events.handle_event(message_event(""), Scheduler())
+    assert "Say something" in response["text"]
+
+
+async def test_an_attachment_only_message_asks_for_something_when_the_feature_is_off(
+    token_service, monkeypatch
+):
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    monkeypatch.setattr(events, "get_settings", lambda: Settings(chat_attachments_enabled=False))
+
+    response = await events.handle_event(message_event("", attachment=[_attachment()]), Scheduler())
+
+    assert "Say something" in response["text"]
 
 
 async def test_help_command_needs_no_authorization(token_service, monkeypatch):
@@ -408,7 +461,7 @@ def _reply_settings(monkeypatch, *, in_thread: bool = False, streaming: bool = T
     )
 
 
-async def _fake_answer(user_id, session_id, message, on_progress=None):
+async def _fake_answer(user_id, session_id, message, on_progress=None, attachments=None):
     return "Your next meeting is at 3pm."
 
 
@@ -459,7 +512,7 @@ async def test_run_and_reply_reports_timeout_instead_of_failing_silently(monkeyp
     _reply_settings(monkeypatch)
     client = _recording_client(monkeypatch)
 
-    async def fake_run(user_id, session_id, message, on_progress=None):
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
         raise TimeoutError
 
     monkeypatch.setattr(events, "run_agent", fake_run)
@@ -473,7 +526,7 @@ async def test_run_and_reply_reports_agent_error(monkeypatch):
     _reply_settings(monkeypatch)
     client = _recording_client(monkeypatch)
 
-    async def fake_run(user_id, session_id, message, on_progress=None):
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
         raise RuntimeError("model exploded")
 
     monkeypatch.setattr(events, "run_agent", fake_run)
@@ -481,6 +534,84 @@ async def test_run_and_reply_reports_agent_error(monkeypatch):
     await events.run_and_reply(events.parse_event(message_event()))
 
     assert client.delivered["cardsV2"][0]["cardId"] == "error"
+
+
+# --- attachments riding along with a run ---
+
+
+async def test_run_and_reply_forwards_resolved_attachment_parts(monkeypatch):
+    from google.genai import types
+
+    _reply_settings(monkeypatch)
+    _recording_client(monkeypatch)
+    resolved_part = types.Part(text="Attached file: photo.png (image/png)")
+
+    async def fake_resolve(raw, **kwargs):
+        assert raw == [_attachment()]
+        return [resolved_part], []
+
+    monkeypatch.setattr(events, "resolve_attachments", fake_resolve)
+
+    seen: dict = {}
+
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
+        seen["attachments"] = attachments
+        return "nice photo"
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    ctx = events.parse_event(message_event("look at this", attachment=[_attachment()]))
+    await events.run_and_reply(ctx)
+
+    assert seen["attachments"] == [resolved_part]
+
+
+async def test_run_and_reply_turns_notes_into_extra_text_parts(monkeypatch):
+    _reply_settings(monkeypatch)
+    _recording_client(monkeypatch)
+
+    async def fake_resolve(raw, **kwargs):
+        return [], ["photo.png: too large to include (20.0 MB)."]
+
+    monkeypatch.setattr(events, "resolve_attachments", fake_resolve)
+
+    seen: dict = {}
+
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
+        seen["attachments"] = attachments
+        return "ok"
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    ctx = events.parse_event(message_event("look at this", attachment=[_attachment()]))
+    await events.run_and_reply(ctx)
+
+    assert len(seen["attachments"]) == 1
+    assert seen["attachments"][0].text == (
+        "[Attachment note] photo.png: too large to include (20.0 MB)."
+    )
+
+
+async def test_run_and_reply_skips_resolution_without_attachments(monkeypatch):
+    _reply_settings(monkeypatch)
+    _recording_client(monkeypatch)
+
+    async def fail_resolve(raw, **kwargs):
+        raise AssertionError("must not resolve attachments that were never sent")
+
+    monkeypatch.setattr(events, "resolve_attachments", fail_resolve)
+
+    seen: dict = {}
+
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
+        seen["attachments"] = attachments
+        return "ok"
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    await events.run_and_reply(events.parse_event(message_event("hello")))
+
+    assert seen["attachments"] == []
 
 
 # --- streaming the reply ---
@@ -492,7 +623,7 @@ async def test_a_placeholder_goes_up_before_the_agent_has_written_anything(monke
     _reply_settings(monkeypatch)
     client = _recording_client(monkeypatch)
 
-    async def fake_run(user_id, session_id, message, on_progress=None):
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
         assert client.posts, "the placeholder must already be up when the agent starts"
         return "done"
 
@@ -509,7 +640,7 @@ async def test_the_answer_is_rewritten_as_it_is_written(monkeypatch):
     _reply_settings(monkeypatch)
     client = _recording_client(monkeypatch)
 
-    async def fake_run(user_id, session_id, message, on_progress=None):
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
         await on_progress("Your next")
         await on_progress("Your next meeting")
         return "Your next meeting is at 3pm."
@@ -529,7 +660,7 @@ async def test_an_error_card_clears_the_half_written_text(monkeypatch):
     _reply_settings(monkeypatch)
     client = _recording_client(monkeypatch)
 
-    async def fake_run(user_id, session_id, message, on_progress=None):
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
         await on_progress("Let me check tha")
         raise RuntimeError("model exploded")
 
@@ -545,7 +676,7 @@ async def test_streaming_off_delivers_one_message_at_the_end(monkeypatch):
     _reply_settings(monkeypatch, streaming=False)
     client = _recording_client(monkeypatch)
 
-    async def fake_run(user_id, session_id, message, on_progress=None):
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
         assert on_progress is None, "nothing to stream into, so do not stream"
         return "Your next meeting is at 3pm."
 
@@ -571,7 +702,7 @@ async def test_a_placeholder_that_cannot_be_posted_falls_back_to_the_old_behavio
 
     monkeypatch.setattr(events, "get_chat_client", lambda: HalfBrokenClient())
 
-    async def fake_run(user_id, session_id, message, on_progress=None):
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
         assert on_progress is None, "there is no live message to push into"
         return "Your next meeting is at 3pm."
 

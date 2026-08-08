@@ -107,6 +107,7 @@ async def run_agent(
     session_id: str,
     message: str,
     on_progress: ProgressCallback | None = None,
+    attachments: list[types.Part] | None = None,
 ) -> str:
     """Run one turn and return the agent's final text.
 
@@ -117,13 +118,20 @@ async def run_agent(
             callback is awaited inline, so it must be cheap or throttled — the
             model's output is not consumed while it runs (`LiveReply.push`
             throttles for exactly this reason).
+        attachments: Extra parts appended after the text, e.g. inline file data
+            resolved by `chat/attachments.py`, or a note about one that could
+            not be included. `message` may be empty when a Chat message was
+            attachment-only; the two together must still add up to a
+            non-empty turn.
 
     Raises:
         TimeoutError: if the turn exceeds the configured budget.
     """
     settings = get_settings()
     runner = get_runner()
-    content = types.Content(role="user", parts=[types.Part(text=message)])
+    parts: list[types.Part] = [types.Part(text=message)] if message else []
+    parts.extend(attachments or [])
+    content = types.Content(role="user", parts=parts or [types.Part(text="")])
     run_config = RunConfig(streaming_mode=StreamingMode.SSE if on_progress else StreamingMode.NONE)
 
     async def _run() -> str:

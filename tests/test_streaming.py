@@ -45,9 +45,11 @@ class FakeRunner:
     def __init__(self, events: list[Event]) -> None:
         self._events = events
         self.run_config = None
+        self.new_message = None
 
     async def run_async(self, *, user_id, session_id, new_message, run_config=None):
         self.run_config = run_config
+        self.new_message = new_message
         for event in self._events:
             yield event
 
@@ -205,6 +207,36 @@ async def test_a_turn_that_produced_no_text_still_says_something(fake_runner):
     assert await runner_module.run_agent("users/1", "s", "hi") == (
         "I finished, but produced no text to show."
     )
+
+
+# --- attachments riding along with the turn ---
+
+
+async def test_attachments_are_appended_after_the_text_part(fake_runner):
+    fake = fake_runner([_event("done")])
+    extra = types.Part.from_bytes(data=b"\x89PNG", mime_type="image/png")
+
+    await runner_module.run_agent("users/1", "s", "hi", attachments=[extra])
+
+    assert fake.new_message.parts[0].text == "hi"
+    assert fake.new_message.parts[1] is extra
+
+
+async def test_an_attachment_only_message_needs_no_text_part(fake_runner):
+    """A Chat message can be a bare file with no caption; the turn must still
+    reach the model as something, not an empty parts list."""
+    fake = fake_runner([_event("done")])
+    note = types.Part(text="[Attachment note] report.docx: this file type can't be read directly.")
+
+    await runner_module.run_agent("users/1", "s", "", attachments=[note])
+
+    assert fake.new_message.parts == [note]
+
+
+async def test_no_message_and_no_attachments_still_produces_a_content_part(fake_runner):
+    fake = fake_runner([_event("done")])
+    await runner_module.run_agent("users/1", "s", "")
+    assert fake.new_message.parts == [types.Part(text="")]
 
 
 # --- LiveReply ---

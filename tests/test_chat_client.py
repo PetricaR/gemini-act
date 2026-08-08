@@ -51,12 +51,23 @@ class FakeSpaces:
         return FakeMessages(self._calls)
 
 
+class FakeMedia:
+    def __init__(self, calls: list) -> None:
+        self._calls = calls
+
+    def download_media(self, **kwargs):
+        return FakeRequest(self._calls, "download_media", kwargs)
+
+
 class FakeService:
     def __init__(self) -> None:
         self.calls: list = []
 
     def spaces(self):
         return FakeSpaces(self.calls)
+
+    def media(self):
+        return FakeMedia(self.calls)
 
 
 @pytest.fixture
@@ -112,6 +123,18 @@ async def test_a_user_identity_delete_keeps_its_own_credentials(client, monkeypa
     await chat.delete_message("spaces/AAA/messages/m1", access_token="user-token")
 
     assert user_service.calls[0]["http"] is None, "use the service's own authorized transport"
+
+
+async def test_download_attachment_uses_the_media_download_method(client):
+    """Must be `download_media`, not `download` — the plain method tries to
+    JSON-decode the response and would choke on raw file bytes."""
+    chat, service = client
+
+    await chat.download_attachment("spaces/AAA/messages/BBB/attachments/CCC")
+
+    assert service.calls[0]["kind"] == "download_media"
+    assert service.calls[0]["resourceName"] == "spaces/AAA/messages/BBB/attachments/CCC"
+    assert service.calls[0]["http"] is not None, "its own transport, like every other call"
 
 
 async def test_an_app_identity_delete_uses_a_private_transport(client):

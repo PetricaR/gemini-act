@@ -233,6 +233,30 @@ class ChatClient:
 
         return await asyncio.to_thread(_execute)
 
+    async def download_attachment(self, resource_name: str) -> bytes:
+        """Fetch the raw bytes of an attachment a user uploaded straight into Chat.
+
+        Only for `Attachment.source == UPLOADED_CONTENT`; a Drive-sourced
+        attachment has no bytes of its own here and is fetched from the Drive
+        API instead, with the user's own token — see `chat/attachments.py`.
+        `chat.bot` (already held for posting) is enough: it names the app as a
+        member of the space the attachment lives in.
+
+        `download_media` (not `download`) is the variant `googleapiclient`
+        generates for a `supportsMediaDownload` method: it skips JSON parsing
+        and returns the raw response body.
+        """
+        service = await self._get_service()
+
+        def _execute() -> bytes:
+            return (
+                service.media()
+                .download_media(resourceName=resource_name)
+                .execute(http=self._new_http())
+            )
+
+        return await asyncio.to_thread(_execute)
+
     async def list_spaces(self) -> list[dict[str, Any]]:
         service = await self._get_service()
 

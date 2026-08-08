@@ -219,6 +219,20 @@ class Settings(BaseSettings):
     # 1.0s a single long answer would sit on the quota on its own.
     chat_stream_interval_seconds: float = 1.5
 
+    # Files a user drops straight into a Chat message. Off restores the old
+    # behaviour of ignoring them (the model still sees Drive files it finds
+    # itself through the Drive MCP tool, which is unaffected by this).
+    chat_attachments_enabled: bool = True
+    # Sent to Gemini as inline base64, which is ~4/3 the raw size, so this is
+    # kept well under the API's ~20MB request limit rather than at it. An
+    # attachment over this is reported to the user, not silently dropped —
+    # see `chat/attachments.py`.
+    chat_attachment_max_bytes: int = 15_000_000
+    # Each attachment is a live download (Chat's media API or Drive's) before
+    # the agent can even start thinking; this bounds how many one message can
+    # force onto the critical path.
+    chat_attachment_max_count: int = 5
+
     # OAuth
     oauth_client_id: str = ""
     oauth_client_secret: str = ""

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+from google.genai import types
 
 from gemini_act.agent.tools import probe_server
 from gemini_act.chat import cards
+from gemini_act.chat.attachments import resolve_attachments
 from gemini_act.chat.client import get_chat_client
 from gemini_act.chat.live_reply import PLACEHOLDER, LiveReply
 from gemini_act.config import get_settings
@@ -116,6 +119,9 @@ class ChatContext:
     thread: str
     text: str
     command: str | None
+    # Raw `Attachment` dicts straight off the Chat payload — see
+    # `chat/attachments.py` for turning these into content the model can read.
+    attachments: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
     @property
     def thread_key(self) -> str | None:
@@ -168,6 +174,7 @@ def parse_event(event: dict[str, Any]) -> ChatContext:
         thread=thread.get("name", ""),
         text=text,
         command=_extract_command(event, message),
+        attachments=tuple(message.get("attachment") or ()),
     )
 
 
@@ -231,7 +238,8 @@ async def _handle_normalized(event: dict[str, Any], schedule) -> dict[str, Any]:
     if ctx.command:
         return await _handle_command(ctx, schedule)
 
-    if not ctx.text:
+    has_attachments = get_settings().chat_attachments_enabled and bool(ctx.attachments)
+    if not ctx.text and not has_attachments:
         return cards.text_message("Say something and I'll get to work.")
 
     return await _handle_message(ctx, schedule)
@@ -468,6 +476,25 @@ async def connect_mcp_and_reply(ctx: ChatContext, text: str) -> None:
     await reply.finish(cards.mcp_result_card(connected, failed))
 
 
+async def _resolve_attachments(ctx: ChatContext) -> list[types.Part]:
+    """Parts to append to the user's turn: inline file data, plus a note for
+    anything that could not be included. Empty (not an error) when the feature
+    is off or the message carried no attachments."""
+    settings = get_settings()
+    if not settings.chat_attachments_enabled or not ctx.attachments:
+        return []
+
+    parts, notes = await resolve_attachments(
+        list(ctx.attachments),
+        user_id=ctx.user_id,
+        chat_client=get_chat_client(),
+        token_service=get_token_service(),
+        settings=settings,
+    )
+    parts.extend(types.Part(text=f"[Attachment note] {note}") for note in notes)
+    return parts
+
+
 async def run_and_reply(ctx: ChatContext) -> None:
     """Run the agent and show its answer being written.
 
@@ -482,11 +509,13 @@ async def run_and_reply(ctx: ChatContext) -> None:
         await reply.start()
 
     try:
+        attachment_parts = await _resolve_attachments(ctx)
         answer = await run_agent(
             ctx.user_id,
             ctx.session_id,
             ctx.text,
             on_progress=reply.push if reply.is_live else None,
+            attachments=attachment_parts,
         )
         body = cards.text_message(answer)
     except TimeoutError:
