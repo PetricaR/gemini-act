@@ -569,11 +569,8 @@ async def _send_reply_attachment(ctx: ChatContext, raw: str) -> None:
 
     access_token = await get_token_service().get_access_token(ctx.user_id)
     if not access_token:
-        await _post_reply(
-            client,
-            ctx,
-            cards.text_message(f"I have *{attachment.filename}* ready, but need you to /auth first."),
-        )
+        note = f"I have *{attachment.filename}* ready, but need you to /auth first."
+        await _post_reply(client, ctx, cards.text_message(note))
         return
 
     try:

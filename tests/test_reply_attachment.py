@@ -55,7 +55,9 @@ def test_split_on_a_string_still_growing_mid_stream_finds_nothing_yet():
 def test_a_valid_payload_decodes_to_the_original_bytes():
     raw = _payload(b"hello world", "notes.txt", "text/plain")
     result = parse_reply_attachment(raw, max_bytes=1_000)
-    assert result == ReplyAttachment(filename="notes.txt", mime_type="text/plain", data=b"hello world")
+    assert result == ReplyAttachment(
+        filename="notes.txt", mime_type="text/plain", data=b"hello world"
+    )
 
 
 def test_malformed_json_is_not_an_attachment():

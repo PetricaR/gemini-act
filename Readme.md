@@ -234,6 +234,8 @@ Everything is environment-driven; see [.env.example](.env.example). The ones tha
 | `GEMINI_ACT_THINKING_LEVEL` | `MINIMAL`/`LOW`/`MEDIUM`/`HIGH`. The largest single lever on reply latency, paid on every LLM call in a turn |
 | `GEMINI_ACT_CHAT_STREAMING_ENABLED` | Show the answer being written instead of delivering it in one piece |
 | `GEMINI_ACT_CHAT_ATTACHMENTS_ENABLED` | Read files a user attaches directly to a Chat message (default on) — see [attachments.py](src/gemini_act/chat/attachments.py). Separate from the Drive MCP tool, which the model can already use to find files itself |
+| `GEMINI_ACT_CHAT_A2UI_ENABLED` | Render buttons/images/layout the model attaches to an answer (default on) — see [a2ui.py](src/gemini_act/chat/a2ui.py) |
+| `GEMINI_ACT_CHAT_REPLY_ATTACHMENTS_ENABLED` | Let the model send a file it composed back as a Chat attachment (default on) — see [reply_attachment.py](src/gemini_act/chat/reply_attachment.py). Sent as the user, not the app: Chat has no way to upload as the app's own identity, so this needs the user to have run `/auth` |
 | `GEMINI_ACT_SESSION_DB_URL` | Empty means in-memory sessions, lost on restart |
 
 ## Adding tools

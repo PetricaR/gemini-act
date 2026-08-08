@@ -193,6 +193,40 @@ async def test_download_attachment_against_the_real_generated_client():
     )
 
 
+async def test_upload_attachment_against_the_real_generated_client(monkeypatch):
+    """Same rationale as the download test above, for the other direction:
+    `media().upload()` only exists, and only builds a multipart request to
+    the `/upload/v1/...` path, because the discovery document says so —
+    nothing a hand-rolled fake could catch if that stopped being true."""
+    import json
+
+    from googleapiclient.discovery import build_from_document
+
+    discovery_path = (
+        Path(googleapiclient.__file__).parent / "discovery_cache" / "documents" / "chat.v1.json"
+    )
+    document = json.loads(discovery_path.read_text())
+    transport = _FakeHttpTransport(
+        content=b'{"attachmentDataRef": {"resourceName": "spaces/AAA/messages/x/attachments/y"}}'
+    )
+    # `upload_attachment` builds a fresh user-identity service per call and
+    # executes with its own default transport (no explicit `http=` override,
+    # unlike every app-identity call) — so the fake has to live there.
+    service = build_from_document(document, http=transport)
+    monkeypatch.setattr(ChatClient, "_build_user_service", staticmethod(lambda token: service))
+
+    chat = ChatClient()
+    result = await chat.upload_attachment(
+        "spaces/AAA", "report.csv", b"a,b\n1,2\n", "text/csv", access_token="user-token"
+    )
+
+    assert result == {"attachmentDataRef": {"resourceName": "spaces/AAA/messages/x/attachments/y"}}
+    assert transport.calls[0]["method"] == "POST"
+    assert transport.calls[0]["uri"].startswith(
+        "https://chat.googleapis.com/upload/v1/spaces/AAA/attachments:upload"
+    )
+
+
 async def test_an_app_identity_delete_uses_a_private_transport(client):
     chat, service = client
 

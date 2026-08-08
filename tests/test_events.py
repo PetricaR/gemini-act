@@ -822,7 +822,9 @@ async def test_run_and_reply_sends_a_reply_attachment_after_the_text_reply(
 
     follow_up = client.posts[-1]
     assert follow_up["body"] == {
-        "attachment": [{"attachmentDataRef": {"resourceName": "spaces/AAA/messages/x/attachments/y"}}]
+        "attachment": [
+            {"attachmentDataRef": {"resourceName": "spaces/AAA/messages/x/attachments/y"}}
+        ]
     }
     assert follow_up["access_token"] == "user-access-token"
 
@@ -884,8 +886,9 @@ async def test_reply_attachments_can_be_turned_off(authorized, monkeypatch):
     assert len(client.posts) == 1
 
 
-async def test_a_failed_upload_is_reported_not_left_unexplained(authorized, monkeypatch):
-    await authorized()
+async def test_a_failed_upload_is_reported_not_left_unexplained(token_service, monkeypatch):
+    await _with_access_token(token_service)
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
     _reply_settings(monkeypatch)
 
     class FailingUploadClient(RecordingChatClient):
@@ -903,9 +906,12 @@ async def test_a_failed_upload_is_reported_not_left_unexplained(authorized, monk
 
     await events.run_and_reply(events.parse_event(message_event("export my data")))
 
-    assert "report.csv" in client.posts[-1]["body"]["cardsV2"][0]["card"]["sections"][0]["widgets"][0][
-        "textParagraph"
-    ]["text"]
+    assert (
+        "report.csv"
+        in client.posts[-1]["body"]["cardsV2"][0]["card"]["sections"][0]["widgets"][0][
+            "textParagraph"
+        ]["text"]
+    )
 
 
 # --- streaming the reply ---
