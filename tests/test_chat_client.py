@@ -173,10 +173,7 @@ async def test_download_attachment_against_the_real_generated_client():
     from googleapiclient.discovery import build_from_document
 
     discovery_path = (
-        Path(googleapiclient.__file__).parent
-        / "discovery_cache"
-        / "documents"
-        / "chat.v1.json"
+        Path(googleapiclient.__file__).parent / "discovery_cache" / "documents" / "chat.v1.json"
     )
     document = json.loads(discovery_path.read_text())
     service = build_from_document(document, credentials=None)
@@ -192,8 +189,7 @@ async def test_download_attachment_against_the_real_generated_client():
     assert result == b"\x89PNG raw bytes, not json", "MediaModel must hand back raw bytes"
     assert transport.calls[0]["method"] == "GET"
     assert transport.calls[0]["uri"] == (
-        "https://chat.googleapis.com/v1/media/"
-        "spaces/AAA/messages/BBB/attachments/CCC?alt=media"
+        "https://chat.googleapis.com/v1/media/spaces/AAA/messages/BBB/attachments/CCC?alt=media"
     )
 
 
