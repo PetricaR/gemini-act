@@ -6,6 +6,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from gemini_act.chat.a2ui import MARKER as A2UI_MARKER
+from gemini_act.chat.reply_attachment import MARKER as ATTACHMENT_MARKER
 
 EET = ZoneInfo("Europe/Bucharest")  # Eastern European Time, DST-aware (EET/EEST)
 
@@ -63,6 +64,24 @@ Rich UI, when it genuinely helps:
 - When someone clicks a button with an "action", you see it as a new message
   describing which one and with what context. Treat it exactly like any
   other message — it is the user's real input, not a note about the UI.
+
+Sending a file back, when you have real content to hand over:
+- For something you composed yourself — a small CSV, a text report, a short
+  export — not for a Google Drive file, which you can already share as a
+  link through your Drive tools; that link works for something arbitrarily
+  large, this does not.
+- End your answer with a line containing exactly """
+    + ATTACHMENT_MARKER
+    + """
+  and nothing else, then a single JSON object with three keys: "filename"
+  (with its extension), "mimeType", and "contentBase64" — the file's bytes,
+  base64-encoded. Keep it small; this is for a quick document, not a bulk
+  export.
+- A turn can end with this marker or the A2UI one above, never both — pick
+  the one the answer actually needs.
+- The file arrives as a short second message, not merged into your reply
+  text — say what the file is in your own answer; do not repeat that as
+  text in the file message itself, since there is no such thing here.
 
 How to use tools:
 - Prefer acting over describing how the user could act. If you have a tool for

@@ -470,8 +470,11 @@ class RecordingChatClient:
     def __init__(self) -> None:
         self.posts: list[dict] = []
         self.updates: list[dict] = []
+        self.uploads: list[dict] = []
 
-    async def post_message(self, space, body, thread_name=None, thread_key=None):
+    async def post_message(
+        self, space, body, thread_name=None, thread_key=None, *, access_token=None
+    ):
         name = f"{space}/messages/m{len(self.posts) + 1}"
         self.posts.append(
             {
@@ -479,6 +482,7 @@ class RecordingChatClient:
                 "body": body,
                 "thread_name": thread_name,
                 "thread_key": thread_key,
+                "access_token": access_token,
                 "name": name,
             }
         )
@@ -487,6 +491,18 @@ class RecordingChatClient:
     async def update_message(self, name, body):
         self.updates.append({"name": name, "body": body})
         return {"name": name}
+
+    async def upload_attachment(self, space, filename, data, mime_type, *, access_token):
+        self.uploads.append(
+            {
+                "space": space,
+                "filename": filename,
+                "data": data,
+                "mime_type": mime_type,
+                "access_token": access_token,
+            }
+        )
+        return {"attachmentDataRef": {"resourceName": f"{space}/messages/x/attachments/y"}}
 
     @property
     def delivered(self) -> dict:
@@ -740,6 +756,156 @@ async def test_a2ui_rendering_can_be_turned_off(monkeypatch):
     delivered = client.delivered
     assert delivered["text"] == "Here's what I found."
     assert "cardsV2" not in delivered
+
+
+# --- sending a file the model attached to its reply ---
+
+
+def _attachment_answer(spoken: str, filename: str, mime_type: str, data: bytes) -> str:
+    import base64
+    import json
+
+    from gemini_act.chat.reply_attachment import MARKER
+
+    payload = {
+        "filename": filename,
+        "mimeType": mime_type,
+        "contentBase64": base64.b64encode(data).decode("ascii"),
+    }
+    return f"{spoken}\n\n{MARKER}\n{json.dumps(payload)}"
+
+
+async def _with_access_token(token_service: TokenService, token: str = "user-access-token") -> None:
+    """Seed a token that is already fresh, unlike the plain `authorized`
+    fixture: `_send_reply_attachment` calls `get_access_token`, not
+    `get_token`, and a token with no `access_token`/`expiry` set would try to
+    refresh for real against Google's OAuth endpoint."""
+    from datetime import UTC, datetime, timedelta
+
+    await token_service.store.put(
+        "users/123",
+        StoredToken(
+            refresh_token="r",
+            scopes=["s"],
+            access_token=token,
+            expiry=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+
+
+async def test_run_and_reply_sends_a_reply_attachment_after_the_text_reply(
+    token_service, monkeypatch
+):
+    await _with_access_token(token_service)
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    _reply_settings(monkeypatch)
+    client = _recording_client(monkeypatch)
+    answer = _attachment_answer("Here's your report.", "report.csv", "text/csv", b"a,b\n1,2\n")
+
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
+        return answer
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    ctx = events.parse_event(message_event("export my data", thread="t1", space_type="DM"))
+    await events.run_and_reply(ctx)
+
+    assert client.delivered["text"] == "Here's your report."
+    assert "csv" not in str(client.delivered), "the raw payload must never leak into the text reply"
+
+    assert len(client.uploads) == 1
+    upload = client.uploads[0]
+    assert upload["filename"] == "report.csv"
+    assert upload["mime_type"] == "text/csv"
+    assert upload["data"] == b"a,b\n1,2\n"
+    assert upload["access_token"] == "user-access-token"
+
+    follow_up = client.posts[-1]
+    assert follow_up["body"] == {
+        "attachment": [{"attachmentDataRef": {"resourceName": "spaces/AAA/messages/x/attachments/y"}}]
+    }
+    assert follow_up["access_token"] == "user-access-token"
+
+
+async def test_reply_attachment_without_authorization_asks_to_auth(token_service, monkeypatch):
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    _reply_settings(monkeypatch)
+    client = _recording_client(monkeypatch)
+    answer = _attachment_answer("Here's your report.", "report.csv", "text/csv", b"data")
+
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
+        return answer
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    await events.run_and_reply(events.parse_event(message_event("export my data")))
+
+    assert not client.uploads, "must not attempt an upload with no token to upload as"
+    assert "report.csv" in client.posts[-1]["body"]["text"]
+    assert "/auth" in client.posts[-1]["body"]["text"]
+
+
+async def test_a_malformed_reply_attachment_is_silently_dropped(authorized, monkeypatch):
+    await authorized()
+    _reply_settings(monkeypatch)
+    client = _recording_client(monkeypatch)
+    from gemini_act.chat.reply_attachment import MARKER
+
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
+        return f"Here's your report.\n\n{MARKER}\n{{not valid json"
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    await events.run_and_reply(events.parse_event(message_event("export my data")))
+
+    assert client.delivered["text"] == "Here's your report."
+    assert not client.uploads
+    assert len(client.posts) == 1, "no follow-up at all for a model's own mistake"
+
+
+async def test_reply_attachments_can_be_turned_off(authorized, monkeypatch):
+    await authorized()
+    client = _recording_client(monkeypatch)
+    monkeypatch.setattr(
+        events,
+        "get_settings",
+        lambda: Settings(chat_reply_attachments_enabled=False, chat_stream_interval_seconds=0.0),
+    )
+    answer = _attachment_answer("Here's your report.", "report.csv", "text/csv", b"data")
+
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
+        return answer
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    await events.run_and_reply(events.parse_event(message_event("export my data")))
+
+    assert not client.uploads
+    assert len(client.posts) == 1
+
+
+async def test_a_failed_upload_is_reported_not_left_unexplained(authorized, monkeypatch):
+    await authorized()
+    _reply_settings(monkeypatch)
+
+    class FailingUploadClient(RecordingChatClient):
+        async def upload_attachment(self, space, filename, data, mime_type, *, access_token):
+            raise RuntimeError("Chat had a moment")
+
+    client = FailingUploadClient()
+    monkeypatch.setattr(events, "get_chat_client", lambda: client)
+    answer = _attachment_answer("Here's your report.", "report.csv", "text/csv", b"data")
+
+    async def fake_run(user_id, session_id, message, on_progress=None, attachments=None):
+        return answer
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    await events.run_and_reply(events.parse_event(message_event("export my data")))
+
+    assert "report.csv" in client.posts[-1]["body"]["cardsV2"][0]["card"]["sections"][0]["widgets"][0][
+        "textParagraph"
+    ]["text"]
 
 
 # --- streaming the reply ---

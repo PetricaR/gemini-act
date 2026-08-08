@@ -76,6 +76,13 @@ MCP_SCOPES: dict[str, tuple[str, ...]] = {
     "gmail": (
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.compose",
+        # Needed for any label change on an existing message — label_message /
+        # unlabel_message (including "mark as read", which removes UNREAD).
+        # readonly only covers reads and compose only covers drafts/sending, so
+        # without this every modify call 403s with insufficient_scope while
+        # reads keep working fine, same class of bug as the calendar.events and
+        # maps-platform.mapstools cases documented below.
+        "https://www.googleapis.com/auth/gmail.modify",
     ),
     "drive": (
         "https://www.googleapis.com/auth/drive.readonly",
@@ -240,6 +247,13 @@ class Settings(BaseSettings):
     # than parsing or rendering it (the system instruction still describes the
     # capability either way, same as the attachments flag above).
     chat_a2ui_enabled: bool = True
+
+    # The model attaching a file *to* its reply, the reverse of the setting
+    # above — see `chat/reply_attachment.py`. Sending it needs the user's own
+    # OAuth token (Chat has no way to upload as the app itself), so this is
+    # inert for anyone who has not run /auth regardless of the flag; off just
+    # means a payload the model still writes is discarded rather than sent.
+    chat_reply_attachments_enabled: bool = True
 
     # OAuth
     oauth_client_id: str = ""

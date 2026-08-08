@@ -14,8 +14,11 @@ from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 
 from gemini_act.agent.factory import get_agent
-from gemini_act.chat.a2ui import MARKER, split_a2ui
+from gemini_act.chat.a2ui import MARKER as A2UI_MARKER
+from gemini_act.chat.a2ui import split_a2ui
 from gemini_act.chat.formatting import to_chat_markup
+from gemini_act.chat.reply_attachment import MARKER as ATTACHMENT_MARKER
+from gemini_act.chat.reply_attachment import split_reply_attachment
 from gemini_act.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -104,6 +107,27 @@ def _format_citations(grounding_metadata: types.GroundingMetadata | None) -> str
     return "\n\nSources:\n" + "\n".join(lines)
 
 
+def _split_special_payload(text: str) -> tuple[str, str]:
+    """Spoken text, plus a marker+JSON suffix to keep verbatim in the string
+    `run_agent` returns (empty if there is neither).
+
+    A turn is only ever expected to carry one of the two payloads `events.py`
+    understands — a reply attachment or an A2UI card, per the system
+    instruction — so this tries the attachment marker first and only falls
+    back to the A2UI one if that was absent. A model that emits both anyway
+    is not specially handled: the second marker is left inside "spoken" as
+    literal trailing text, which is a visibly wrong reply rather than a
+    guess at how to merge two payloads that were never meant to coexist.
+    """
+    spoken, raw_attachment = split_reply_attachment(text)
+    if raw_attachment:
+        return spoken, f"\n\n{ATTACHMENT_MARKER}\n{raw_attachment}"
+    spoken, raw_a2ui = split_a2ui(text)
+    if raw_a2ui:
+        return spoken, f"\n\n{A2UI_MARKER}\n{raw_a2ui}"
+    return text, ""
+
+
 async def run_agent(
     user_id: str,
     session_id: str,
@@ -154,25 +178,25 @@ async def run_agent(
                     # Accumulated raw, converted only for display: a `**`
                     # opened in one delta and closed in the next would not
                     # convert correctly if each fragment were rewritten in
-                    # isolation before being joined. `split_a2ui` similarly
-                    # keeps a UI payload's marker (and the JSON growing after
-                    # it) out of the live preview — there is nothing useful to
-                    # show of it until the turn is done and `events.py` can
-                    # parse and render the whole thing.
+                    # isolation before being joined. `_split_special_payload`
+                    # similarly keeps a card or attachment's marker (and the
+                    # JSON growing after it) out of the live preview — there
+                    # is nothing useful to show of it until the turn is done
+                    # and `events.py` can parse and act on the whole thing.
                     streamed += text
-                    spoken, _ = split_a2ui(streamed)
+                    spoken, _ = _split_special_payload(streamed)
                     await on_progress(to_chat_markup(spoken))
                 continue
             if event.is_final_response() and text.strip():
                 # A turn that calls tools produces several of these — a remark
                 # before the tool call, then the real answer. The last one wins,
                 # but each is shown as it lands so the wait is not silent.
-                spoken, raw_a2ui = split_a2ui(text)
+                spoken, suffix = _split_special_payload(text)
                 display = to_chat_markup(spoken) + _format_citations(event.grounding_metadata)
                 # The marker and its JSON ride along in the *returned* string
-                # for `events.py` to split back out and render — but never in
+                # for `events.py` to split back out and act on — but never in
                 # what `on_progress` shows, which is display text only.
-                final = display + (f"\n\n{MARKER}\n{raw_a2ui}" if raw_a2ui else "")
+                final = display + suffix
                 streamed = ""
                 if on_progress:
                     await on_progress(display)

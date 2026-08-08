@@ -104,6 +104,8 @@ class ChatClient:
         body: dict[str, Any],
         thread_name: str | None = None,
         thread_key: str | None = None,
+        *,
+        access_token: str | None = None,
     ) -> dict[str, Any]:
         """Post an arbitrary message body (text and/or cards) into a space.
 
@@ -116,8 +118,18 @@ class ChatClient:
         which holds a DM in a single continuous thread rather than fragmenting
         into a new one per exchange. Pass at most one; `thread_name` wins if
         both are given.
+
+        Pass `access_token` to post as that user instead of as the app — the
+        only way a message can carry a freshly-uploaded `attachment` (see
+        `upload_attachment`): Chat's app identity is not among the scopes the
+        API accepts for a message that references one.
         """
-        service = await self._get_service()
+        service = (
+            await asyncio.to_thread(self._build_user_service, access_token)
+            if access_token
+            else await self._get_service()
+        )
+        http = None if access_token else self._new_http()
         payload = dict(body)
         kwargs: dict[str, Any] = {"parent": space, "body": payload}
         if thread_name:
@@ -129,7 +141,7 @@ class ChatClient:
             kwargs["messageReplyOption"] = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
 
         def _execute() -> dict[str, Any]:
-            return service.spaces().messages().create(**kwargs).execute(http=self._new_http())
+            return service.spaces().messages().create(**kwargs).execute(http=http)
 
         return await asyncio.to_thread(_execute)
 
@@ -253,6 +265,31 @@ class ChatClient:
                 service.media()
                 .download_media(resourceName=resource_name)
                 .execute(http=self._new_http())
+            )
+
+        return await asyncio.to_thread(_execute)
+
+    async def upload_attachment(
+        self, space: str, filename: str, data: bytes, mime_type: str, *, access_token: str
+    ) -> dict[str, Any]:
+        """Upload bytes as a new Chat attachment, returning an `Attachment`.
+
+        Always as the user, never as the app: `media.upload`'s accepted scopes
+        are `chat.messages(.create)`/`chat.import`, and `chat.bot` — the app's
+        own identity, used for every other write this client makes — is not
+        among them. The returned dict is a `attachmentDataRef` wrapper meant
+        to be dropped straight into a later `post_message(..., {"attachment":
+        [this]})` call, per Chat's own upload guide.
+        """
+        from googleapiclient.http import MediaInMemoryUpload
+
+        def _execute() -> dict[str, Any]:
+            service = self._build_user_service(access_token)
+            media = MediaInMemoryUpload(data, mimetype=mime_type)
+            return (
+                service.media()
+                .upload(parent=space, body={"filename": filename}, media_body=media)
+                .execute()
             )
 
         return await asyncio.to_thread(_execute)

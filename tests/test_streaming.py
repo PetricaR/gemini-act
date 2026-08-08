@@ -293,6 +293,44 @@ async def test_an_a2ui_payload_survives_being_returned_unstreamed(fake_runner):
     assert result == f'Here you go.\n\n{MARKER}\n{{"components": []}}'
 
 
+# --- a reply attachment gets the same treatment ---
+
+
+async def test_a_reply_attachment_payload_is_kept_out_of_every_progress_update(streamed):
+    from gemini_act.chat.reply_attachment import MARKER as ATTACHMENT_MARKER
+
+    payload = '{"filename": "x.txt", "mimeType": "text/plain", "contentBase64": "aGVsbG8="}'
+    seen, result = await streamed(
+        [
+            _event("Here's your file.\n\n---chat_attachment_J", partial=True),
+            _event(f"Here's your file.\n\n{ATTACHMENT_MARKER}\n" + payload[:20], partial=True),
+            _event(f"Here's your file.\n\n{ATTACHMENT_MARKER}\n{payload}", partial=False),
+        ]
+    )
+    assert all(ATTACHMENT_MARKER not in text for text in seen)
+    assert all("contentBase64" not in text for text in seen)
+    assert seen[-1] == "Here's your file."
+    assert result.endswith(payload)
+
+
+async def test_the_attachment_marker_wins_if_a_model_writes_both(fake_runner):
+    """A turn is only ever supposed to carry one of the two payloads (per the
+    system instruction); if a model writes both anyway, the attachment marker
+    is tried first, and the a2ui marker is left as literal (visibly wrong,
+    not silently merged or guessed at) trailing text."""
+    from gemini_act.chat.a2ui import MARKER as A2UI_MARKER
+    from gemini_act.chat.reply_attachment import MARKER as ATTACHMENT_MARKER
+
+    a2ui_tail = f'{A2UI_MARKER}\n{{"components": []}}'
+    payload = '{"filename": "x.txt", "mimeType": "text/plain", "contentBase64": "aGVsbG8="}'
+    fake_runner([_event(f"Text.\n\n{ATTACHMENT_MARKER}\n{payload}\n\n{a2ui_tail}")])
+
+    result = await runner_module.run_agent("users/1", "s", "hi")
+
+    assert result.startswith(f"Text.\n\n{ATTACHMENT_MARKER}\n{payload}")
+    assert a2ui_tail in result, "left in place, not dropped or specially handled"
+
+
 # --- LiveReply ---
 
 

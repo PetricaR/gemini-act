@@ -14,6 +14,11 @@ from gemini_act.chat.a2ui import parse_a2ui, render_a2ui, split_a2ui
 from gemini_act.chat.attachments import resolve_attachments
 from gemini_act.chat.client import get_chat_client
 from gemini_act.chat.live_reply import PLACEHOLDER, LiveReply
+from gemini_act.chat.reply_attachment import (
+    attachment_message,
+    parse_reply_attachment,
+    split_reply_attachment,
+)
 from gemini_act.config import get_settings
 from gemini_act.mcp.spec import (
     McpServerSpec,
@@ -542,6 +547,60 @@ def _build_reply_body(answer: str) -> dict[str, Any]:
     return cards.a2ui_message(spoken, widgets)
 
 
+async def _send_reply_attachment(ctx: ChatContext, raw: str) -> None:
+    """Upload and send a file the model attached to its reply, as a follow-up
+    message — see `chat/reply_attachment.py` for why it cannot be merged into
+    the text reply's own message.
+
+    A malformed payload degrades silently (a model mistake, logged but not
+    worth reporting, same as an unusable A2UI payload); missing authorization
+    or an actual send failure are worth a word, since the user is otherwise
+    left wondering why the file they were told about never showed up.
+    """
+    settings = get_settings()
+    if not settings.chat_reply_attachments_enabled:
+        return
+
+    client = get_chat_client()
+    attachment = parse_reply_attachment(raw, max_bytes=settings.chat_attachment_max_bytes)
+    if attachment is None:
+        logger.warning("Discarding unusable reply attachment payload: %s", raw[:200])
+        return
+
+    access_token = await get_token_service().get_access_token(ctx.user_id)
+    if not access_token:
+        await _post_reply(
+            client,
+            ctx,
+            cards.text_message(f"I have *{attachment.filename}* ready, but need you to /auth first."),
+        )
+        return
+
+    try:
+        upload_response = await client.upload_attachment(
+            ctx.space,
+            attachment.filename,
+            attachment.data,
+            attachment.mime_type,
+            access_token=access_token,
+        )
+        thread_name, thread_key = _thread_target(ctx)
+        await client.post_message(
+            ctx.space,
+            attachment_message(upload_response),
+            thread_name=thread_name,
+            thread_key=thread_key,
+            access_token=access_token,
+        )
+    except Exception:
+        logger.exception("Failed to send reply attachment for %s in %s", ctx.user_id, ctx.space)
+        await _post_reply(
+            client,
+            ctx,
+            cards.error_card(f"I had *{attachment.filename}* ready but couldn't send it."),
+        )
+
+
 async def run_and_reply(ctx: ChatContext) -> None:
     """Run the agent and show its answer being written.
 
@@ -555,6 +614,7 @@ async def run_and_reply(ctx: ChatContext) -> None:
     if get_settings().chat_streaming_enabled:
         await reply.start()
 
+    raw_attachment = ""
     try:
         attachment_parts = await _resolve_attachments(ctx)
         answer = await run_agent(
@@ -564,7 +624,11 @@ async def run_and_reply(ctx: ChatContext) -> None:
             on_progress=reply.push if reply.is_live else None,
             attachments=attachment_parts,
         )
-        body = _build_reply_body(answer)
+        # A reply attachment takes precedence over an A2UI card — see
+        # `runner._split_special_payload` — and is sent as a follow-up below,
+        # once the text reply itself is settled, not folded into `body`.
+        spoken, raw_attachment = split_reply_attachment(answer)
+        body = cards.text_message(spoken) if raw_attachment else _build_reply_body(answer)
     except TimeoutError:
         logger.warning("Agent timed out for %s in %s", ctx.user_id, ctx.space)
         body = cards.error_card("That took too long and I stopped. Try narrowing the request.")
@@ -575,6 +639,9 @@ async def run_and_reply(ctx: ChatContext) -> None:
         )
 
     await reply.finish(body)
+
+    if raw_attachment:
+        await _send_reply_attachment(ctx, raw_attachment)
 
 
 async def clean_conversation_and_reply(ctx: ChatContext) -> None:
