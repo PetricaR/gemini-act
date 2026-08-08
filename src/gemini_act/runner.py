@@ -69,6 +69,39 @@ def _event_text(event: Event) -> str:
     return "".join(part.text or "" for part in event.content.parts if not part.thought)
 
 
+# How many sources to list. Grounding can return more chunks than are worth
+# showing in a chat reply — this keeps it a source list, not a bibliography.
+MAX_CITATIONS = 5
+
+
+def _format_citations(grounding_metadata: types.GroundingMetadata | None) -> str:
+    """Render Google Search grounding sources as text Chat can link.
+
+    Grounding with Google Search requires showing where a grounded answer came
+    from. `grounding_metadata.search_entry_point.rendered_content` is the HTML
+    widget Google's own docs point to for that, but it is meant for a web page
+    or app webview — Chat's plain-text messages cannot render it. This instead
+    turns each source in `grounding_chunks` into Chat's own link syntax
+    (`<url|title>`, see developers.google.com/workspace/chat/format-messages),
+    which achieves the same thing within what a Chat message can show.
+    """
+    if not grounding_metadata or not grounding_metadata.grounding_chunks:
+        return ""
+    seen: set[str] = set()
+    lines: list[str] = []
+    for chunk in grounding_metadata.grounding_chunks:
+        web = chunk.web
+        if not web or not web.uri or web.uri in seen:
+            continue
+        seen.add(web.uri)
+        lines.append(f"- <{web.uri}|{web.title or web.uri}>")
+        if len(lines) == MAX_CITATIONS:
+            break
+    if not lines:
+        return ""
+    return "\n\nSources:\n" + "\n".join(lines)
+
+
 async def run_agent(
     user_id: str,
     session_id: str,
@@ -115,10 +148,10 @@ async def run_agent(
                 # A turn that calls tools produces several of these — a remark
                 # before the tool call, then the real answer. The last one wins,
                 # but each is shown as it lands so the wait is not silent.
-                final = text
+                final = text + _format_citations(event.grounding_metadata)
                 streamed = ""
                 if on_progress:
-                    await on_progress(text)
+                    await on_progress(final)
         return final
 
     result = await asyncio.wait_for(_run(), timeout=settings.agent_timeout_seconds)

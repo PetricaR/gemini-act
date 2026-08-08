@@ -12,13 +12,30 @@ from gemini_act.chat.live_reply import CURSOR, MAX_TEXT, PLACEHOLDER, LiveReply
 from gemini_act.config import Settings
 
 
-def _event(text: str, *, partial: bool = False, thought: str = "") -> Event:
+def _event(
+    text: str,
+    *,
+    partial: bool = False,
+    thought: str = "",
+    grounding_metadata: types.GroundingMetadata | None = None,
+) -> Event:
     parts = [types.Part(text=thought, thought=True)] if thought else []
     parts.append(types.Part(text=text))
     return Event(
         author="gemini_act",
         content=types.Content(role="model", parts=parts),
         partial=partial,
+        grounding_metadata=grounding_metadata,
+    )
+
+
+def _grounding(*sources: tuple[str, str]) -> types.GroundingMetadata:
+    """`sources` is (uri, title) pairs, matching what Google Search grounding returns."""
+    return types.GroundingMetadata(
+        grounding_chunks=[
+            types.GroundingChunk(web=types.GroundingChunkWeb(uri=uri, title=title))
+            for uri, title in sources
+        ]
     )
 
 
@@ -122,6 +139,49 @@ async def test_the_models_reasoning_is_never_posted_into_the_space(streamed):
 
     assert "probably means" not in " ".join(seen)
     assert result == "The answer is 42."
+
+
+async def test_search_grounded_answers_list_their_sources(streamed):
+    """Google's Grounding with Google Search terms require showing where a
+    grounded answer came from; Chat can't render the HTML widget Google's own
+    docs point to for that, so this has to become Chat's own link syntax."""
+    seen, result = await streamed(
+        [
+            _event(
+                "Paris is the capital of France.",
+                grounding_metadata=_grounding(("https://example.com/paris", "Paris — Example")),
+            )
+        ]
+    )
+
+    assert result == (
+        "Paris is the capital of France.\n\nSources:\n- <https://example.com/paris|Paris — Example>"
+    )
+    assert seen[-1] == result, (
+        "the streamed update must carry the sources too, not just the final return"
+    )
+
+
+async def test_grounding_sources_are_deduplicated_and_capped(streamed):
+    sources = [(f"https://example.com/{i}", f"Source {i}") for i in range(8)]
+    sources.append(sources[0])  # a repeat, as real grounding responses do
+    _, result = await streamed([_event("answer", grounding_metadata=_grounding(*sources))])
+
+    listed = [line for line in result.splitlines() if line.startswith("- <")]
+    assert len(listed) == runner_module.MAX_CITATIONS
+    assert len(set(listed)) == len(listed), "no source should be listed twice"
+
+
+async def test_a_source_without_a_title_falls_back_to_its_url(streamed):
+    _, result = await streamed(
+        [_event("answer", grounding_metadata=_grounding(("https://example.com/x", "")))]
+    )
+    assert "<https://example.com/x|https://example.com/x>" in result
+
+
+async def test_an_ungrounded_answer_has_no_sources_section(streamed):
+    _, result = await streamed([_event("just an answer, no search involved")])
+    assert "Sources:" not in result
 
 
 async def test_streaming_is_only_requested_when_someone_is_listening(fake_runner):

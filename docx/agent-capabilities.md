@@ -68,6 +68,13 @@ no per-user OAuth — it is a model-native capability, not a Workspace call — 
 adds an LLM round trip and is billed separately on Vertex AI, so it is a toggle
 (`Settings.web_search_enabled`, default on) rather than an always-on business tool.
 
+Grounding with Google Search requires showing where a grounded answer came from. Google's own
+docs point to rendering `search_entry_point.rendered_content`, an HTML widget meant for a web
+page or app webview — Chat's plain-text messages cannot show it, so
+[`runner.py`](../src/gemini_act/runner.py) instead lists each `grounding_chunks[].web` source as
+a Chat-native link (`<url|title>`) appended to the answer, capped at `MAX_CITATIONS` and
+deduplicated by URL.
+
 ## Chat tools (act as the app itself, not the user)
 
 [`agent/tools/chat_tools.py`](../src/gemini_act/agent/tools/chat_tools.py) — for when the app should
