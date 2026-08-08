@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from gemini_act.agent.factory import build_agent
 from gemini_act.agent.tools import business, workspace_mcp
-from gemini_act.config import MCP_SCOPES, MCP_SERVERS, Settings
+from gemini_act.config import MCP_ENDPOINT_OVERRIDES, MCP_SCOPES, MCP_SERVERS, Settings
 
 
 def _settings(**overrides) -> Settings:
@@ -210,6 +210,28 @@ def test_mcp_toolsets_override_the_five_second_default(token_service, monkeypatc
         assert params.timeout > StreamableHTTPConnectionParams(url="x").timeout
 
 
+def test_calendars_registry_endpoint_is_corrected(token_service, monkeypatch):
+    """Calendar's Agent Registry entry advertises /mcp, which 404s; the server
+    is at /mcp/v1. Left alone the toolset dies at `initialize` and contributes
+    no tools at all, on every turn."""
+    monkeypatch.setattr(workspace_mcp, "AgentRegistry", FakeAgentRegistry)
+    settings = _settings(mcp_enabled="gmail,calendar")
+
+    urls = {
+        toolset._inner.tool_name_prefix: toolset._inner._mcp_session_manager._connection_params.url
+        for toolset in workspace_mcp.build_workspace_toolsets(settings, token_service)
+    }
+
+    assert urls["calendar"] == MCP_ENDPOINT_OVERRIDES["calendar"]
+    # Servers without an override keep whatever the registry resolved.
+    assert urls["gmail"] == f"https://example.invalid/{MCP_SERVERS['gmail']}"
+
+
+def test_every_endpoint_override_names_a_configured_server():
+    """A typo'd key here is silent: the override simply never applies."""
+    assert set(MCP_ENDPOINT_OVERRIDES) <= set(MCP_SERVERS)
+
+
 def test_prompt_forbids_inventing_causes_for_tool_failures():
     """The agent once told a user to fix account settings for an error whose
     real cause was Developer Preview enrolment — a fix that could not work."""
@@ -230,9 +252,9 @@ def test_cloud_platform_scope_is_always_requested():
 
 
 def test_cloud_platform_requested_even_with_no_mcp_servers():
-    assert "https://www.googleapis.com/auth/cloud-platform" in _settings(
-        mcp_enabled=""
-    ).oauth_scopes
+    assert (
+        "https://www.googleapis.com/auth/cloud-platform" in _settings(mcp_enabled="").oauth_scopes
+    )
 
 
 def test_instruction_carries_todays_date():

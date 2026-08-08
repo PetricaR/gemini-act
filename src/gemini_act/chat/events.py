@@ -6,9 +6,17 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from gemini_act.agent.tools import probe_server
 from gemini_act.chat import cards
 from gemini_act.chat.client import get_chat_client
 from gemini_act.config import get_settings
+from gemini_act.mcp.spec import (
+    McpServerSpec,
+    McpSpecError,
+    looks_like_mcp_config,
+    parse_mcp_config,
+)
+from gemini_act.mcp.store import get_mcp_registry
 from gemini_act.oauth.routes import start_url
 from gemini_act.oauth.store import get_token_service
 from gemini_act.runner import reset_session, run_agent
@@ -23,7 +31,18 @@ SLASH_COMMANDS: dict[str, str] = {
     "3": "reset",
     "4": "whoami",
     "5": "clean",
+    "6": "mcp",
 }
+
+_MCP_USAGE = (
+    "<b>/mcp</b> — list the servers you've connected<br>"
+    "<b>/mcp add</b> &lt;url or JSON config&gt; — connect one<br>"
+    "<b>/mcp remove</b> &lt;name&gt; — disconnect one<br><br>"
+    "You can also just paste a server URL or config on its own and I'll connect it."
+)
+
+# Enough of a failure to be actionable, short enough for a card.
+_MAX_ERROR_LENGTH = 300
 
 KNOWN_COMMANDS = frozenset(SLASH_COMMANDS.values())
 
@@ -239,6 +258,9 @@ async def _handle_command(ctx: ChatContext, schedule) -> dict[str, Any]:
         schedule(clean_conversation_and_reply, ctx)
         return {}
 
+    if ctx.command == "mcp":
+        return await _handle_mcp_command(ctx, schedule)
+
     if ctx.command == "whoami":
         token = await get_token_service().get_token(ctx.user_id)
         if token is None:
@@ -254,8 +276,70 @@ async def _handle_command(ctx: ChatContext, schedule) -> dict[str, Any]:
     return cards.text_message(f"I don't know the command /{ctx.command}.")
 
 
+def _command_argument(ctx: ChatContext) -> str:
+    """Whatever followed the slash command.
+
+    Chat strips the command out of `argumentText` only for commands registered
+    on the Chat API page. One that reached us through the text fallback in
+    `_extract_command` still carries it, so strip it here for both cases.
+    """
+    text = ctx.text.strip()
+    if ctx.command and text.lower().startswith(f"/{ctx.command}"):
+        text = text[len(ctx.command) + 1 :]
+    return text.strip()
+
+
+async def _handle_mcp_command(ctx: ChatContext, schedule) -> dict[str, Any]:
+    if not get_settings().custom_mcp_enabled:
+        return cards.text_message("Connecting your own MCP servers is turned off here.")
+
+    argument = _command_argument(ctx)
+    # maxsplit=1: a pasted JSON config runs over several lines and must survive
+    # intact as the remainder.
+    parts = argument.split(maxsplit=1)
+    action = parts[0].lower() if parts else "list"
+    rest = parts[1] if len(parts) > 1 else ""
+
+    if action in {"list", "ls"}:
+        return cards.mcp_list_card(await get_mcp_registry().list(ctx.user_id))
+
+    if action in {"add", "connect"}:
+        if not rest.strip():
+            return cards.text_message(
+                "Give me a server — for example `/mcp add https://mcp.example.com/mcp`."
+            )
+        # Connecting means a live round trip to someone else's server, which can
+        # outlast Chat's ~30s synchronous budget.
+        schedule(connect_mcp_and_reply, ctx, rest)
+        return {}
+
+    if action in {"remove", "rm", "delete", "disconnect"}:
+        name = rest.strip()
+        if not name:
+            return cards.text_message("Which one? `/mcp remove <name>`.")
+        if await get_mcp_registry().remove(ctx.user_id, name):
+            return cards.text_message(f"Disconnected *{name}*. Its tools are gone from my list.")
+        return cards.text_message(
+            f"You don't have a server called *{name}*. Use /mcp to see what you have."
+        )
+
+    # `/mcp https://…` — the argument is the server itself, not a subcommand.
+    if looks_like_mcp_config(argument):
+        schedule(connect_mcp_and_reply, ctx, argument)
+        return {}
+
+    return cards.mcp_usage_card(_MCP_USAGE)
+
+
 async def _handle_message(ctx: ChatContext, schedule) -> dict[str, Any]:
     settings = get_settings()
+
+    # A pasted server is an instruction to us, not a question for the model —
+    # and it is answered before the auth check below, because a custom server
+    # carries its own credentials and needs no Google consent.
+    if settings.custom_mcp_enabled and looks_like_mcp_config(ctx.text):
+        schedule(connect_mcp_and_reply, ctx, ctx.text)
+        return {}
 
     # Without credentials the Workspace tools cannot do anything, so ask first
     # rather than letting the agent run and fail mid-way.
@@ -301,6 +385,72 @@ async def _post_reply(client, ctx: ChatContext, body: dict[str, Any]) -> None:
         )
     except Exception:
         logger.exception("Could not post reply into %s", ctx.space)
+
+
+def _short_reason(exc: BaseException) -> str:
+    """A failure the user can act on, without a stack trace in their chat."""
+    detail = str(exc).strip() or exc.__class__.__name__
+    # ADK re-wraps its own message, so the raw text arrives as "Failed to create
+    # MCP session: Failed to create MCP session: <the actual cause>".
+    clauses = detail.split(": ")
+    detail = ": ".join(
+        clause for index, clause in enumerate(clauses) if index == 0 or clause != clauses[index - 1]
+    )
+    if len(detail) > _MAX_ERROR_LENGTH:
+        detail = f"{detail[:_MAX_ERROR_LENGTH]}…"
+    return detail
+
+
+async def connect_mcp_and_reply(ctx: ChatContext, text: str) -> None:
+    """Connect the server(s) described by `text`, then report what happened.
+
+    Each server is connected for real before it is saved. A URL that does not
+    speak MCP, or a token that is wrong, then fails once — here, while the user
+    is waiting and can be told why — instead of being stored and quietly
+    breaking every later turn.
+    """
+    client = get_chat_client()
+    settings = get_settings()
+    registry = get_mcp_registry()
+
+    try:
+        specs = parse_mcp_config(text, allowed_hosts=settings.custom_mcp_allowed_hosts)
+    except McpSpecError as exc:
+        await _post_reply(client, ctx, cards.error_card(str(exc)))
+        return
+
+    connected: list[tuple[McpServerSpec, list[str]]] = []
+    failed: list[tuple[McpServerSpec, str]] = []
+
+    for spec in specs:
+        try:
+            tools = await probe_server(spec, settings)
+        except TimeoutError:
+            failed.append(
+                (spec, f"it didn't answer within {settings.mcp_timeout_seconds:.0f} seconds")
+            )
+            continue
+        except Exception as exc:
+            logger.warning("MCP probe failed for %s (%s)", spec.name, spec.host, exc_info=True)
+            failed.append((spec, _short_reason(exc)))
+            continue
+
+        if not tools:
+            # Storing it would put a server in the user's list that can never
+            # contribute anything, which reads as a silent failure later.
+            failed.append((spec, "it connected but offers no tools"))
+            continue
+
+        try:
+            await registry.add(ctx.user_id, spec)
+        except McpSpecError as exc:
+            failed.append((spec, str(exc)))
+            continue
+
+        logger.info("User %s connected MCP server %s (%s)", ctx.user_id, spec.name, spec.host)
+        connected.append((spec, tools))
+
+    await _post_reply(client, ctx, cards.mcp_result_card(connected, failed))
 
 
 async def run_and_reply(ctx: ChatContext) -> None:

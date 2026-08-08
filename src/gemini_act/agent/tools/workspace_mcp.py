@@ -30,7 +30,7 @@ from google.adk.integrations.agent_registry import AgentRegistry
 from google.adk.tools.base_toolset import BaseToolset
 
 from gemini_act.agent.tools.caching_toolset import CachingToolset
-from gemini_act.config import MCP_SERVERS, Settings
+from gemini_act.config import MCP_ENDPOINT_OVERRIDES, MCP_SERVERS, Settings
 from gemini_act.oauth.store import TokenService
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,19 @@ def build_workspace_toolsets(
         # 5s default timeout and does not expose a way to override it; these
         # servers routinely take 15-25s, so raise it after construction.
         toolset._connection_params.timeout = settings.mcp_timeout_seconds
+
+        # Same reason we reach into the connection params above: the URL comes
+        # from the registry entry, and one of those entries is wrong. See
+        # MCP_ENDPOINT_OVERRIDES for which, and why it is not inferable.
+        override = MCP_ENDPOINT_OVERRIDES.get(server)
+        if override and override != toolset._connection_params.url:
+            logger.info(
+                "Overriding %s MCP endpoint: registry says %s, using %s",
+                server,
+                toolset._connection_params.url,
+                override,
+            )
+            toolset._connection_params.url = override
         # Keep our own short, predictable prefix (registry derives one from the
         # server's registered display name, which need not match `server`) so
         # e.g. Gmail's and Chat's `search` do not collide in the model's tool

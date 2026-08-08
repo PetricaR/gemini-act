@@ -47,6 +47,28 @@ MCP_SERVERS: dict[str, str] = {
     "storage": "agentregistry-00000000-0000-0000-2d58-34bf4b09480a",
 }
 
+# Endpoint URLs to use instead of the one Agent Registry advertises, per server.
+#
+# Normally the registry entry's `interfaces[].url` is authoritative and this map
+# is empty. Calendar is currently an exception: its entry advertises
+# https://calendarmcp.googleapis.com/mcp, which answers 404 to every request,
+# while the server actually lives at /mcp/v1 like the other Workspace servers.
+# The effect is not a degraded Calendar — it is no Calendar at all, on every
+# turn, since the toolset fails at `initialize` and never lists a single tool.
+#
+# Verified 2026-08-08 by POSTing `initialize` to both paths for all eight
+# registered servers: only Calendar's registry URL is wrong. The rest split
+# between /mcp/v1 (gmail, drive, chat, people), /mcp (bigquery, maps) and
+# /storage/mcp (storage), each matching what its entry advertises — so this is a
+# per-server registry data bug, not a version convention we can infer.
+#
+# Re-probe before assuming this is still needed: the fix belongs on Google's
+# side, and once the entry is corrected this override silently keeps working
+# (same URL) but should be dropped.
+MCP_ENDPOINT_OVERRIDES: dict[str, str] = {
+    "calendar": "https://calendarmcp.googleapis.com/mcp/v1",
+}
+
 # OAuth scopes requested from the end user, per MCP server. Taken from the
 # Workspace MCP configuration guide; keep these in sync with the scopes added to
 # the OAuth consent screen or authorization will fail at runtime.
@@ -61,8 +83,22 @@ MCP_SCOPES: dict[str, tuple[str, ...]] = {
     ),
     "calendar": (
         "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+        # Needed by suggest_time (freebusy.query); calendar.events does NOT
+        # cover it, nor does calendarlist.readonly cover list_calendars — the
+        # three below are disjoint, none is redundant.
         "https://www.googleapis.com/auth/calendar.events.freebusy",
-        "https://www.googleapis.com/auth/calendar.events.readonly",
+        # Read *and write* on events, replacing calendar.events.readonly (of
+        # which it is a superset). This server exposes create_event,
+        # update_event, delete_event and respond_to_event, so read-only left the
+        # model offering four actions it could only ever fail at, with the same
+        # insufficient_scope 403 that hid the Maps bug.
+        #
+        # Deliberately not the broader .../auth/calendar: that additionally
+        # grants creating and deleting whole calendars, which no tool here does.
+        # Confirmed from both directions — the Calendar v3 discovery doc lists
+        # calendar.events as accepted for events.insert/update/patch/delete, and
+        # the MCP server's own 403 on create_event names it in WWW-Authenticate.
+        "https://www.googleapis.com/auth/calendar.events",
     ),
     "chat": (
         "https://www.googleapis.com/auth/chat.spaces.readonly",
@@ -79,10 +115,15 @@ MCP_SCOPES: dict[str, tuple[str, ...]] = {
     # bigquery / cloud-platform / cloud-platform.read-only — bigquery.readonly
     # is not in that list, so it would not actually let the model run queries.
     "bigquery": ("https://www.googleapis.com/auth/bigquery",),
-    # Maps' tools (search_places, lookup_weather, compute_routes, ...) act on
-    # Maps Platform/place data, not the end user's personal Google data — no
-    # extra scope observed to be needed beyond BASE_OAUTH_SCOPES' cloud-platform.
-    "maps": (),
+    # Maps' tools act on Maps Platform/place data rather than the end user's
+    # personal Google data, but the server still gates them behind its own
+    # scope: cloud-platform alone gets `initialize` and `tools/list` through
+    # (which is why discovery succeeds and only the actual tool call fails),
+    # then `tools/call` returns 403 with
+    #   WWW-Authenticate: Bearer error="insufficient_scope",
+    #     scope="https://www.googleapis.com/auth/maps-platform.mapstools"
+    # Taken from that header, i.e. named by the server itself, not guessed.
+    "maps": ("https://www.googleapis.com/auth/maps-platform.mapstools",),
     # Verified against the Cloud Storage API discovery doc. read_only would be
     # insufficient: this server's tools include create_bucket, write_text and
     # delete_object, which need read_write.
@@ -158,7 +199,22 @@ class Settings(BaseSettings):
     # Storage
     token_store: str = "firestore"
     firestore_collection: str = "gemini_act_tokens"
+    firestore_mcp_collection: str = "gemini_act_mcp_servers"
     session_db_url: str = ""
+
+    # User-connected MCP servers: paste a server URL (or a client's JSON config
+    # block) into the chat and its tools join that user's next turn. Per user —
+    # one person's servers are never visible to another.
+    custom_mcp_enabled: bool = True
+    custom_mcp_max_per_user: int = 10
+    # Hosts a pasted server may live on, as bare hostnames ("mcp.example.com");
+    # a leading dot is not needed, subdomains of a listed host are accepted.
+    # Empty (the default) accepts any https host, which is a real trust
+    # decision: the tools of whatever server a user pastes run inside the same
+    # agent turn as their Workspace tools, so a hostile server can both read
+    # what the agent has fetched and return text that tries to steer it. Set
+    # this to lock the feature down to servers you vet.
+    custom_mcp_allowed_hosts: Annotated[tuple[str, ...], NoDecode] = ()
 
     # Capabilities. NoDecode is required: without it pydantic-settings tries to
     # JSON-decode this env var before the validator below runs, so the plain CSV
@@ -190,7 +246,7 @@ class Settings(BaseSettings):
     # effectively static, so an hour is safe.
     mcp_cache_ttl_seconds: float = 3600.0
 
-    @field_validator("mcp_enabled", mode="before")
+    @field_validator("mcp_enabled", "custom_mcp_allowed_hosts", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):

@@ -27,6 +27,23 @@ OAuth), so it can only do what that person could already do themselves.
 | `/reset` | Forget this conversation's memory — the agent starts fresh, messages stay visible |
 | `/clean` | Delete every message in the conversation (yours and the bot's) and reset memory |
 | `/whoami` | Show which Google account the agent is currently acting as |
+| `/mcp` | List your own MCP servers; `/mcp add <url or config>`, `/mcp remove <name>` |
+
+## Bring your own tools
+
+Paste a remote MCP server's URL — or the JSON config block a vendor hands you — into the chat and
+the agent connects it and keeps it. Its tools show up on your next message, named after the server
+(`acme_search`), and they are yours alone: servers are stored per Chat user, so connecting one
+changes nothing for anyone else and needs no redeploy.
+
+The server is contacted and asked for its tool list before it is saved, so a wrong URL or a stale
+token fails immediately with the reason rather than degrading later turns. Remote https servers
+only — a stdio config (`"command": "npx"`) is refused, since running it would mean executing a
+command chosen by a chat message inside the agent's container.
+
+Results from these servers are third-party data, and the agent is instructed to treat them as data
+rather than instructions. A deployment that wants a hard boundary sets
+`GEMINI_ACT_CUSTOM_MCP_ALLOWED_HOSTS` to the hosts it trusts.
 
 ## Business tools (always available, no auth needed)
 

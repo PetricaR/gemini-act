@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from html import escape
 from typing import Any
 
 APP_TITLE = "Gemini Act"
+
+# How many of a server's tool names to show before summarising the rest.
+_TOOL_PREVIEW = 6
 
 
 def text_message(text: str) -> dict[str, Any]:
@@ -45,8 +49,18 @@ def welcome_card() -> dict[str, Any]:
                     {
                         "textParagraph": {
                             "text": (
+                                "You can also paste an MCP server's URL or config and I'll "
+                                "connect it for you — its tools become yours from the next "
+                                "message."
+                            )
+                        }
+                    },
+                    {
+                        "textParagraph": {
+                            "text": (
                                 "<b>Commands</b><br>"
                                 "/auth — connect or reconnect your Google account<br>"
+                                "/mcp — list, add or remove your MCP servers<br>"
                                 "/reset — forget this thread's conversation<br>"
                                 "/clean — delete every message in this conversation<br>"
                                 "/whoami — show which account I'm using<br>"
@@ -84,6 +98,120 @@ def auth_card(auth_url: str, reason: str = "") -> dict[str, Any]:
                 ]
             }
         ],
+    )
+
+
+def mcp_result_card(
+    connected: list[tuple[Any, list[str]]],
+    failed: list[tuple[Any, str]],
+) -> dict[str, Any]:
+    """The outcome of connecting one or more pasted MCP servers.
+
+    Both lists hold `(McpServerSpec, ...)` pairs — a whole config can be pasted
+    at once, and some of its servers can work while others do not, so this
+    reports per server rather than one verdict for the batch.
+    """
+    widgets: list[dict[str, Any]] = []
+
+    for spec, tools in connected:
+        preview = ", ".join(tools[:_TOOL_PREVIEW])
+        if len(tools) > _TOOL_PREVIEW:
+            preview += f", +{len(tools) - _TOOL_PREVIEW} more"
+        widgets.append(
+            {
+                "textParagraph": {
+                    "text": (
+                        f"✅ <b>{escape(spec.name)}</b> connected — {len(tools)} tool(s) "
+                        f"from {escape(spec.host)}.<br>{escape(preview)}"
+                    )
+                }
+            }
+        )
+
+    for spec, reason in failed:
+        widgets.append(
+            {
+                "textParagraph": {
+                    "text": (
+                        f"⚠️ Couldn't connect <b>{escape(spec.name)}</b> "
+                        f"({escape(spec.host)}): {escape(reason)}"
+                    )
+                }
+            }
+        )
+
+    if connected:
+        widgets.append(
+            {
+                "textParagraph": {
+                    "text": (
+                        "Tools are named after the server, so you'll see "
+                        f"<b>{escape(connected[0][0].name)}_…</b> in my replies. They're live "
+                        "from your next message — /mcp to review, /mcp remove &lt;name&gt; to "
+                        "disconnect."
+                    )
+                }
+            }
+        )
+
+    subtitle = "MCP server connected" if connected else "MCP server not connected"
+    return _card("mcp", [{"widgets": widgets}], subtitle)
+
+
+def mcp_list_card(servers: list[Any]) -> dict[str, Any]:
+    """The user's connected servers, or how to add one when there are none."""
+    if not servers:
+        return _card(
+            "mcp",
+            subtitle="No MCP servers connected",
+            sections=[
+                {
+                    "widgets": [
+                        {
+                            "textParagraph": {
+                                "text": (
+                                    "You haven't connected any MCP servers yet. Paste a server "
+                                    "URL — or the JSON config a vendor gives you — and I'll "
+                                    "connect it.<br><br>"
+                                    "<b>/mcp add</b> https://mcp.example.com/mcp<br>"
+                                    "<b>/mcp remove</b> &lt;name&gt;"
+                                )
+                            }
+                        }
+                    ]
+                }
+            ],
+        )
+
+    lines = "<br>".join(
+        f"<b>{escape(spec.name)}</b> — {escape(spec.url)}"
+        + (f" ({escape(spec.transport)})" if spec.transport != "http" else "")
+        for spec in servers
+    )
+    return _card(
+        "mcp",
+        subtitle=f"{len(servers)} MCP server(s) connected",
+        sections=[
+            {
+                "widgets": [
+                    {"textParagraph": {"text": lines}},
+                    {
+                        "textParagraph": {
+                            "text": "Disconnect one with <b>/mcp remove</b> &lt;name&gt;."
+                        }
+                    },
+                ]
+            }
+        ],
+    )
+
+
+def mcp_usage_card(usage_html: str) -> dict[str, Any]:
+    """What /mcp accepts, shown when the subcommand wasn't recognised."""
+    return _card(
+        "mcp",
+        subtitle="Your MCP servers",
+        sections=[{"widgets": [{"textParagraph": {"text": usage_html}}]}],
     )
 
 

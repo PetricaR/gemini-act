@@ -129,14 +129,64 @@ Current mapping (`website-formare-ai`, provisioned 2026-08-07):
 | `maps` | `agentregistry-00000000-0000-0000-087b-e3d7f8e1001a` | `mapstools.googleapis.com` |
 | `storage` | `agentregistry-00000000-0000-0000-2d58-34bf4b09480a` | `storage.googleapis.com` |
 
+## Calendar's registry entry points at the wrong path
+
+Calendar's entry advertises `https://calendarmcp.googleapis.com/mcp`, which answers **404** to
+every request. The server is actually at `/mcp/v1`, like the other Workspace servers. The result is
+not a degraded Calendar but no Calendar at all: the toolset fails at `initialize` and never lists a
+tool, on every single turn — 134 such 404s in one three-day window before this was caught. In the
+logs it surfaces as `Failed to get tools from toolset CachingToolset: ... Session terminated`, which
+does not name Calendar, so it is easy to read past.
+
+Probed all eight servers on both paths (2026-08-08); only Calendar's advertised URL is wrong:
+
+| Path | Servers |
+| --- | --- |
+| `/mcp/v1` | `gmail`, `drive`, `chat`, `people` — and `calendar`, which claims `/mcp` |
+| `/mcp` | `bigquery`, `maps` |
+| `/storage/mcp` | `storage` |
+
+So there is no version convention to infer — it is per-server registry data, and one row of it is
+wrong. **Fix:** `MCP_ENDPOINT_OVERRIDES` in [`config.py`](../src/gemini_act/config.py), applied in
+`build_workspace_toolsets` next to the timeout override. The real fix belongs on Google's side;
+re-probe periodically and drop the override once the entry is corrected, since it will keep working
+silently either way.
+
+Making Calendar reachable also made its write tools reachable. The server exposes `create_event`,
+`update_event`, `delete_event` and `respond_to_event`, which read-only scopes could only ever fail
+at — the same `insufficient_scope` 403 that hid the Maps bug, just one layer further in. So
+`MCP_SCOPES["calendar"]` now requests `.../auth/calendar.events` in place of
+`calendar.events.readonly`, of which it is a superset.
+
+Not the broader `.../auth/calendar`: that also grants creating and deleting entire calendars, which
+no tool here does. Confirmed from both directions — the Calendar v3 discovery doc accepts
+`calendar.events` for `events.insert/update/patch/delete`, and the MCP server's own 403 on
+`create_event` names it in `WWW-Authenticate`.
+
+The other two Calendar scopes stay: `calendar.events` covers neither `freebusy.query` (behind
+`suggest_time`) nor `calendarList.list` (behind `list_calendars`). The three are disjoint.
+
+**This grants the agent the ability to create and delete events in users' calendars.** If that is
+not wanted, the alternative is to keep read-only scopes and hide the four write tools with
+`tool_filter`, which `CachingToolset` already forwards — what must not stay is the middle state,
+where the model is shown tools it cannot use.
+
 OAuth scopes for `bigquery` and `storage` were verified against each API's discovery document
 (`https://bigquery.googleapis.com/discovery/v1/apis/bigquery/v2/rest`,
 `https://storage.googleapis.com/discovery/v1/apis/storage/v1/rest`), not guessed:
 `bigquery.readonly` is not even in `jobs.query`'s accepted-scopes list (only `bigquery`,
 `cloud-platform`, `cloud-platform.read-only` are), and this server's `execute_sql`/`create_bucket`/
-`write_text`/`delete_object` tools need write access, not just read. `maps` requests no extra scope
-— its tools (`search_places`, `lookup_weather`, `compute_routes`, ...) act on Maps Platform data,
-not the end user's personal Google account data.
+`write_text`/`delete_object` tools need write access, not just read.
+
+`maps` needs `https://www.googleapis.com/auth/maps-platform.mapstools`, even though its tools
+(`search_places`, `lookup_weather`, `compute_routes`, ...) act on Maps Platform data rather than the
+end user's personal Google account data. This one is worth knowing because it fails in a misleading
+way: with only `cloud-platform`, `initialize` returns 200 and `tools/list` happily returns all five
+tools, so startup logs read as a healthy toolset ("Discovered 5 maps tool(s)") — the 403 only
+arrives on the first `tools/call`, and ADK surfaces it as `ConnectionError: MCP session connection
+lost: Client error '403 Forbidden'`, which looks like a transport problem rather than a consent one.
+The scope is not guessed: the 403 carries
+`WWW-Authenticate: Bearer error="insufficient_scope", scope=".../auth/maps-platform.mapstools"`.
 
 Not registered for this project (and therefore not usable) — checked twice, both times absent from
 the listing: Docs, Sheets, Slides, the universal "workspace" search server. Registered but

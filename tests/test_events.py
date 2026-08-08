@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from gemini_act.chat import events
@@ -546,3 +548,286 @@ async def test_addon_authorized_user_acks_empty_and_schedules(monkeypatch, token
 
     assert response == {}, "ack must be a bare empty body, not a wrapped empty message"
     assert len(scheduler.calls) == 1
+
+
+# --- MCP servers the user connects themselves ---
+
+
+@pytest.fixture
+def registry(monkeypatch):
+    """An empty per-user MCP registry wired into the event handlers."""
+    from gemini_act.config import Settings
+    from gemini_act.mcp.store import InMemoryMcpServerStore, McpRegistry
+
+    registry = McpRegistry(InMemoryMcpServerStore(), Settings(token_store="memory"))
+    monkeypatch.setattr(events, "get_mcp_registry", lambda: registry)
+    return registry
+
+
+def _spec(name: str = "acme"):
+    from gemini_act.mcp.spec import McpServerSpec
+
+    return McpServerSpec(name=name, url=f"https://{name}.example.com/mcp")
+
+
+async def test_pasted_server_url_is_connected_not_sent_to_the_model(
+    registry, token_service, monkeypatch
+):
+    """The whole point: paste a server, get a server — no /mcp add required."""
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    scheduler = Scheduler()
+
+    response = await events.handle_event(message_event("https://mcp.acme.com/mcp"), scheduler)
+
+    assert response == {}
+    fn, (ctx, text) = scheduler.calls[0]
+    assert fn is events.connect_mcp_and_reply
+    assert text == "https://mcp.acme.com/mcp"
+
+
+async def test_connecting_a_server_does_not_require_google_consent(
+    registry, token_service, monkeypatch
+):
+    """A pasted server brings its own credentials; the auth card would be noise."""
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    scheduler = Scheduler()
+
+    response = await events.handle_event(message_event("https://mcp.acme.com/mcp"), scheduler)
+
+    assert response == {}, "an auth card here would block a flow that needs no auth"
+    assert scheduler.calls
+
+
+async def test_an_ordinary_question_still_reaches_the_agent(authorized, registry):
+    await authorized()
+    scheduler = Scheduler()
+
+    await events.handle_event(message_event("summarise https://example.com/post"), scheduler)
+
+    assert scheduler.calls[0][0] is events.run_and_reply
+
+
+async def test_mcp_list_shows_connected_servers(registry, token_service, monkeypatch):
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    await registry.add("users/123", _spec("acme"))
+
+    response = await events.handle_event(message_event("/mcp", command_id="6"), Scheduler())
+
+    text = response["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["textParagraph"]["text"]
+    assert "acme" in text
+
+
+async def test_mcp_list_is_empty_for_a_new_user(registry, token_service, monkeypatch):
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    response = await events.handle_event(message_event("/mcp list", command_id="6"), Scheduler())
+    assert "No MCP servers" in response["cardsV2"][0]["card"]["header"]["subtitle"]
+
+
+async def test_mcp_add_schedules_a_connection(registry, token_service, monkeypatch):
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    scheduler = Scheduler()
+
+    response = await events.handle_event(
+        message_event("/mcp add https://acme.example.com/mcp", command_id="6"), scheduler
+    )
+
+    assert response == {}
+    fn, (_, text) = scheduler.calls[0]
+    assert fn is events.connect_mcp_and_reply
+    assert text == "https://acme.example.com/mcp"
+
+
+async def test_mcp_add_works_when_chat_has_not_stripped_the_command(
+    registry, token_service, monkeypatch
+):
+    """An unregistered slash command arrives with '/mcp' still in argumentText."""
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    scheduler = Scheduler()
+
+    await events.handle_event(message_event("/mcp add https://acme.example.com/mcp"), scheduler)
+
+    _, (_, text) = scheduler.calls[0]
+    assert text == "https://acme.example.com/mcp"
+
+
+async def test_mcp_remove_forgets_the_server(registry, token_service, monkeypatch):
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    await registry.add("users/123", _spec("acme"))
+
+    response = await events.handle_event(
+        message_event("/mcp remove acme", command_id="6"), Scheduler()
+    )
+
+    assert "Disconnected" in response["text"]
+    assert await registry.list("users/123") == []
+
+
+async def test_mcp_remove_says_so_when_there_is_nothing_to_remove(
+    registry, token_service, monkeypatch
+):
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    response = await events.handle_event(
+        message_event("/mcp remove ghost", command_id="6"), Scheduler()
+    )
+    assert "don't have a server called" in response["text"]
+
+
+async def test_mcp_with_an_unknown_subcommand_shows_usage(registry, token_service, monkeypatch):
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    response = await events.handle_event(message_event("/mcp wibble", command_id="6"), Scheduler())
+    text = response["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["textParagraph"]["text"]
+    assert "/mcp add" in text
+
+
+async def test_mcp_can_be_turned_off_for_a_deployment(registry, token_service, monkeypatch):
+    """With the feature off, a pasted URL is just a message again."""
+    from gemini_act.config import Settings
+
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    monkeypatch.setattr(events, "get_settings", lambda: Settings(custom_mcp_enabled=False))
+    scheduler = Scheduler()
+
+    response = await events.handle_event(message_event("https://mcp.acme.com/mcp"), scheduler)
+
+    assert not scheduler.calls
+    assert response["cardsV2"][0]["cardId"] == "auth", "handled as an ordinary message"
+
+
+async def test_mcp_command_is_refused_when_turned_off(registry, token_service, monkeypatch):
+    from gemini_act.config import Settings
+
+    monkeypatch.setattr(events, "get_token_service", lambda: token_service)
+    monkeypatch.setattr(events, "get_settings", lambda: Settings(custom_mcp_enabled=False))
+
+    response = await events.handle_event(message_event("/mcp", command_id="6"), Scheduler())
+
+    assert "turned off" in response["text"]
+
+
+def _mcp_card_text(body: dict) -> str:
+    widgets = body["cardsV2"][0]["card"]["sections"][0]["widgets"]
+    return " ".join(widget["textParagraph"]["text"] for widget in widgets)
+
+
+@pytest.fixture
+def posted_replies(monkeypatch):
+    """Capture what the async MCP flow posts back into the chat."""
+    posted: list[dict] = []
+
+    class FakeClient:
+        async def post_message(self, space, body, thread_name=None, thread_key=None):
+            posted.append(body)
+            return {}
+
+    monkeypatch.setattr(events, "get_chat_client", lambda: FakeClient())
+    return posted
+
+
+async def test_connecting_probes_before_saving(registry, posted_replies, monkeypatch):
+    """A server is only stored once it has actually answered."""
+    probed: list[str] = []
+
+    async def fake_probe(spec, settings):
+        probed.append(spec.url)
+        return ["search", "fetch"]
+
+    monkeypatch.setattr(events, "probe_server", fake_probe)
+    ctx = events.parse_event(message_event("https://mcp.acme.com/mcp"))
+
+    await events.connect_mcp_and_reply(ctx, "https://mcp.acme.com/mcp")
+
+    assert probed == ["https://mcp.acme.com/mcp"]
+    assert [spec.name for spec in await registry.list("users/123")] == ["acme"]
+    assert "2 tool(s)" in _mcp_card_text(posted_replies[0])
+
+
+async def test_a_server_that_will_not_connect_is_not_saved(registry, posted_replies, monkeypatch):
+    """Storing it would turn one visible failure into a silent one every turn."""
+
+    async def fake_probe(spec, settings):
+        raise ConnectionError("Failed to create MCP session")
+
+    monkeypatch.setattr(events, "probe_server", fake_probe)
+    ctx = events.parse_event(message_event("https://mcp.acme.com/mcp"))
+
+    await events.connect_mcp_and_reply(ctx, "https://mcp.acme.com/mcp")
+
+    assert await registry.list("users/123") == []
+    assert "Failed to create MCP session" in _mcp_card_text(posted_replies[0])
+
+
+async def test_a_timeout_is_reported_as_a_timeout(registry, posted_replies, monkeypatch):
+    async def fake_probe(spec, settings):
+        raise TimeoutError
+
+    monkeypatch.setattr(events, "probe_server", fake_probe)
+    ctx = events.parse_event(message_event("https://mcp.acme.com/mcp"))
+
+    await events.connect_mcp_and_reply(ctx, "https://mcp.acme.com/mcp")
+
+    assert await registry.list("users/123") == []
+    assert "answer within" in _mcp_card_text(posted_replies[0])
+
+
+async def test_a_server_with_no_tools_is_not_saved(registry, posted_replies, monkeypatch):
+    async def fake_probe(spec, settings):
+        return []
+
+    monkeypatch.setattr(events, "probe_server", fake_probe)
+    ctx = events.parse_event(message_event("https://mcp.acme.com/mcp"))
+
+    await events.connect_mcp_and_reply(ctx, "https://mcp.acme.com/mcp")
+
+    assert await registry.list("users/123") == []
+    assert "no tools" in _mcp_card_text(posted_replies[0])
+
+
+async def test_unparseable_paste_explains_itself_without_probing(
+    registry, posted_replies, monkeypatch
+):
+    async def fail(spec, settings):
+        raise AssertionError("must not probe something we could not parse")
+
+    monkeypatch.setattr(events, "probe_server", fail)
+    ctx = events.parse_event(message_event("hello"))
+
+    await events.connect_mcp_and_reply(ctx, '{"mcpServers": {"x": {"command": "npx"}}}')
+
+    assert posted_replies[0]["cardsV2"][0]["cardId"] == "error"
+    assert "stdio" in _mcp_card_text(posted_replies[0])
+
+
+async def test_a_multi_server_config_reports_each_one(registry, posted_replies, monkeypatch):
+    async def fake_probe(spec, settings):
+        if spec.name == "broken":
+            raise ConnectionError("nope")
+        return ["search"]
+
+    monkeypatch.setattr(events, "probe_server", fake_probe)
+    config = json.dumps(
+        {
+            "mcpServers": {
+                "good": {"url": "https://good.example.com/mcp"},
+                "broken": {"url": "https://broken.example.com/mcp"},
+            }
+        }
+    )
+    ctx = events.parse_event(message_event(config))
+
+    await events.connect_mcp_and_reply(ctx, config)
+
+    assert [spec.name for spec in await registry.list("users/123")] == ["good"]
+    text = _mcp_card_text(posted_replies[0])
+    assert "good" in text and "broken" in text
+
+
+def test_a_repeated_error_prefix_is_said_once():
+    """ADK wraps its own message, so the raw text arrives doubled."""
+    exc = ConnectionError(
+        "Failed to create MCP session: Failed to create MCP session: nodename not known"
+    )
+    assert events._short_reason(exc) == "Failed to create MCP session: nodename not known"
+
+
+def test_a_long_error_is_truncated_for_the_card():
+    assert len(events._short_reason(RuntimeError("x" * 5000))) <= events._MAX_ERROR_LENGTH + 1
