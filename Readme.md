@@ -230,6 +230,7 @@ Everything is environment-driven; see [.env.example](.env.example). The ones tha
 | `GEMINI_ACT_PUBLIC_BASE_URL` | Base for the OAuth redirect URI |
 | `GEMINI_ACT_STATE_SECRET` | Signs the OAuth `state`; a weak value lets someone bind their Google account to another Chat user |
 | `GEMINI_ACT_MCP_ENABLED` | Which Workspace MCP servers to expose. Each one costs response time on every turn — enable only what you use |
+| `GEMINI_ACT_WEB_SEARCH_ENABLED` | Google Search grounding (default on). No per-user OAuth, but billed separately on Vertex AI and adds a sub-agent round trip — see [search.py](src/gemini_act/agent/tools/search.py) |
 | `GEMINI_ACT_THINKING_LEVEL` | `MINIMAL`/`LOW`/`MEDIUM`/`HIGH`. The largest single lever on reply latency, paid on every LLM call in a turn |
 | `GEMINI_ACT_CHAT_STREAMING_ENABLED` | Show the answer being written instead of delivering it in one piece |
 | `GEMINI_ACT_SESSION_DB_URL` | Empty means in-memory sessions, lost on restart |

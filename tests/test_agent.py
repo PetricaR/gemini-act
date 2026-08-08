@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from gemini_act.agent.factory import build_agent
-from gemini_act.agent.tools import business, workspace_mcp
+from gemini_act.agent.tools import business, search, workspace_mcp
 from gemini_act.config import (
     MCP_ENDPOINT_OVERRIDES,
     MCP_SCOPES,
@@ -131,14 +131,14 @@ def test_empty_thinking_level_leaves_the_model_default_alone():
 def test_anonymous_agent_omits_workspace_toolsets():
     """`adk web` has no Chat user, so per-user MCP servers must be left out."""
     agent = build_agent(_settings(), token_service=None)
-    assert len(agent.tools) == len(business.BUSINESS_TOOLS) + 3  # + chat tools
+    assert len(agent.tools) == len(business.BUSINESS_TOOLS) + 3 + 1  # + chat tools + search
 
 
 def test_agent_with_token_service_adds_one_toolset_per_enabled_server(token_service, monkeypatch):
     monkeypatch.setattr(workspace_mcp, "AgentRegistry", FakeAgentRegistry)
     settings = _settings(mcp_enabled="gmail,calendar")
     agent = build_agent(settings, token_service=token_service)
-    base = len(business.BUSINESS_TOOLS) + 3
+    base = len(business.BUSINESS_TOOLS) + 3 + 1
     assert len(agent.tools) == base + 2
 
 
@@ -229,6 +229,22 @@ def test_every_business_tool_documents_itself():
     for tool in business.BUSINESS_TOOLS:
         assert tool.__doc__, f"{tool.__name__} needs a docstring"
         assert "Returns:" in tool.__doc__, f"{tool.__name__} must document its return shape"
+
+
+# --- web search ---
+
+
+def test_search_tool_present_by_default():
+    tools = search.build_search_tools(_settings())
+    assert len(tools) == 1
+    assert tools[0].bypass_multi_tools_limit, (
+        "must be wrapped as a sub-agent tool, or it breaks any turn that also "
+        "uses a business/Workspace/custom-MCP tool"
+    )
+
+
+def test_search_tool_omitted_when_disabled():
+    assert search.build_search_tools(_settings(web_search_enabled=False)) == []
 
 
 def test_mcp_toolsets_override_the_five_second_default(token_service, monkeypatch):

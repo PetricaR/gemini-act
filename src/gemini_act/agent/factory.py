@@ -14,6 +14,7 @@ from gemini_act.agent.tools import (
     BUSINESS_TOOLS,
     CHAT_TOOLS,
     CustomMcpToolset,
+    build_search_tools,
     build_workspace_toolsets,
 )
 from gemini_act.config import Settings, get_settings
@@ -57,7 +58,7 @@ def build_agent(
             tools this deployment ships with.
     """
     settings = settings or get_settings()
-    tools: list[Any] = [*BUSINESS_TOOLS, *CHAT_TOOLS]
+    tools: list[Any] = [*BUSINESS_TOOLS, *CHAT_TOOLS, *build_search_tools(settings)]
     tools.extend(build_workspace_toolsets(settings, token_service))
     if settings.custom_mcp_enabled and mcp_registry is not None:
         # Resolves per turn against the calling user, so this single toolset

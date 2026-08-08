@@ -11,9 +11,11 @@ The three below are worked examples — replace them with real integrations.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+EET = ZoneInfo("Europe/Bucharest")  # Eastern European Time, DST-aware (EET/EEST)
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +24,11 @@ logger = logging.getLogger(__name__)
 APPROVED_ACTION_USERS: set[str] = set()
 
 
-def current_time(timezone: str = "UTC") -> dict[str, Any]:
+def current_time(timezone: str = "EET") -> dict[str, Any]:
     """Get the current date and time in a given IANA timezone.
 
     Args:
-        timezone: IANA timezone name, e.g. "Europe/Bucharest" or "UTC".
+        timezone: IANA timezone name, e.g. "Europe/Bucharest" or "EET".
 
     Returns:
         A dict with "status", and on success "timezone", "iso" (ISO-8601
@@ -42,7 +44,7 @@ def current_time(timezone: str = "UTC") -> dict[str, Any]:
                 f"Unknown timezone {timezone!r}. Use an IANA name like 'Europe/Paris'."
             ),
         }
-    now = datetime.now(UTC).astimezone(zone)
+    now = datetime.now(EET).astimezone(zone)
     return {
         "status": "success",
         "timezone": timezone,

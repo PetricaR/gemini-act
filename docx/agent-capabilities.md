@@ -55,6 +55,19 @@ for real internal integrations:
   system (currently a two-row stub: one `store`, one `product`).
 - **`summarize_numbers(values, label)`** — count/total/mean/min/max over a list of numbers.
 
+## Web search (always available, no auth needed)
+
+Google Search grounding — the model's own built-in web search, for questions that fall
+outside Workspace and the business tools (current events, public facts, anything not in the
+user's own data). Wired in [`agent/tools/search.py`](../src/gemini_act/agent/tools/search.py)
+as `GoogleSearchTool(bypass_multi_tools_limit=True)`, ADK's documented way to combine it with
+other tools: Gemini's built-in `google_search` cannot share a request with custom
+function-declaration tools, so ADK runs it inside its own single-tool sub-agent and exposes
+that sub-agent to the root agent as an ordinary callable tool (`google_search_agent`). Needs
+no per-user OAuth — it is a model-native capability, not a Workspace call — but each search
+adds an LLM round trip and is billed separately on Vertex AI, so it is a toggle
+(`Settings.web_search_enabled`, default on) rather than an always-on business tool.
+
 ## Chat tools (act as the app itself, not the user)
 
 [`agent/tools/chat_tools.py`](../src/gemini_act/agent/tools/chat_tools.py) — for when the app should
@@ -135,7 +148,7 @@ Write: `create_bucket`, `write_text`, `delete_object`.
 
 - `src/gemini_act/config.py` — `MCP_SERVERS` (which servers, their Agent Registry ids),
   `MCP_SCOPES` (OAuth scopes per server), `Settings.mcp_enabled` (which are actually turned on).
-- `src/gemini_act/agent/factory.py` — assembles all four tool groups (business, chat, Workspace
-  MCP) onto one `Agent`.
+- `src/gemini_act/agent/factory.py` — assembles all tool groups (business, chat, web search,
+  Workspace MCP, custom MCP) onto one `Agent`.
 - `src/gemini_act/agent/prompts.py` — the system instruction governing *how* it uses these tools
   (ask before destructive actions, never invent causes for tool failures, etc.).
