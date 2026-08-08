@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from functools import lru_cache
 
+from google.adk.agents.run_config import RunConfig, StreamingMode
+from google.adk.events.event import Event
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
@@ -16,6 +19,10 @@ from gemini_act.config import get_settings
 logger = logging.getLogger(__name__)
 
 APP_NAME = "gemini_act"
+
+# Called with the answer as it accumulates, so a caller can show it being
+# written. Receives the whole text each time, not a delta.
+ProgressCallback = Callable[[str], Awaitable[None]]
 
 
 @lru_cache
@@ -49,8 +56,34 @@ async def reset_session(user_id: str, session_id: str) -> None:
         logger.debug("No session to reset for %s/%s", user_id, session_id, exc_info=True)
 
 
-async def run_agent(user_id: str, session_id: str, message: str) -> str:
+def _event_text(event: Event) -> str:
+    """The user-facing text of an event, with the model's reasoning left out.
+
+    A part flagged `thought` is the model thinking aloud, not an answer. Nothing
+    here asks for thought summaries, so in practice none arrive — but the text
+    this returns is posted straight into a Chat space, and "the model was not
+    supposed to send that" is a poor reason to have forwarded it.
+    """
+    if not event.content or not event.content.parts:
+        return ""
+    return "".join(part.text or "" for part in event.content.parts if not part.thought)
+
+
+async def run_agent(
+    user_id: str,
+    session_id: str,
+    message: str,
+    on_progress: ProgressCallback | None = None,
+) -> str:
     """Run one turn and return the agent's final text.
+
+    Args:
+        on_progress: Called with the text written so far as it arrives. Passing
+            it switches the run to SSE streaming; without it the turn runs
+            unstreamed and the caller only sees the finished answer. The
+            callback is awaited inline, so it must be cheap or throttled — the
+            model's output is not consumed while it runs (`LiveReply.push`
+            throttles for exactly this reason).
 
     Raises:
         TimeoutError: if the turn exceeds the configured budget.
@@ -58,16 +91,34 @@ async def run_agent(user_id: str, session_id: str, message: str) -> str:
     settings = get_settings()
     runner = get_runner()
     content = types.Content(role="user", parts=[types.Part(text=message)])
+    run_config = RunConfig(streaming_mode=StreamingMode.SSE if on_progress else StreamingMode.NONE)
 
     async def _run() -> str:
         final = ""
+        # Partial events carry deltas; the aggregated event that closes a
+        # streamed response then repeats the whole thing, so the buffer is only
+        # ever read while streaming and reset once the complete text arrives.
+        streamed = ""
         async for event in runner.run_async(
-            user_id=user_id, session_id=session_id, new_message=content
+            user_id=user_id,
+            session_id=session_id,
+            new_message=content,
+            run_config=run_config,
         ):
-            if event.is_final_response() and event.content and event.content.parts:
-                text = "".join(part.text or "" for part in event.content.parts)
-                if text.strip():
-                    final = text
+            text = _event_text(event)
+            if event.partial:
+                if text and on_progress:
+                    streamed += text
+                    await on_progress(streamed)
+                continue
+            if event.is_final_response() and text.strip():
+                # A turn that calls tools produces several of these — a remark
+                # before the tool call, then the real answer. The last one wins,
+                # but each is shown as it lands so the wait is not silent.
+                final = text
+                streamed = ""
+                if on_progress:
+                    await on_progress(text)
         return final
 
     result = await asyncio.wait_for(_run(), timeout=settings.agent_timeout_seconds)

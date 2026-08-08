@@ -206,6 +206,18 @@ class Settings(BaseSettings):
     # "N replies" bubble the user has to expand; only useful in a named space
     # where several topics run in parallel. See `chat/events.py::_post_reply`.
     chat_reply_in_thread: bool = False
+    # Stream the answer instead of delivering it in one piece. Chat has no
+    # typing indicator an app can raise, so this is built from a placeholder
+    # posted the moment the question arrives, rewritten in place as the model
+    # writes — see `chat/live_reply.py`. Turning it off restores the single
+    # message at the end, and the silence that comes with it.
+    chat_streaming_enabled: bool = True
+    # Minimum seconds between rewrites of the in-flight message. Every rewrite
+    # is a Chat API write against the space's per-minute quota, so this is a
+    # rate limit first and a smoothness knob second. 1.5s caps a streaming reply
+    # at ~40 writes/minute, which leaves the space room for the humans in it; at
+    # 1.0s a single long answer would sit on the quota on its own.
+    chat_stream_interval_seconds: float = 1.5
 
     # OAuth
     oauth_client_id: str = ""

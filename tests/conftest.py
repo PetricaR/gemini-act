@@ -17,6 +17,12 @@ os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "test-project")
 from gemini_act.config import Settings, get_settings  # noqa: E402
 from gemini_act.oauth.store import InMemoryTokenStore, TokenService  # noqa: E402
 
+# Settings reads `.env` from the working directory, so without this the suite
+# asserts against whatever the developer happens to have configured locally —
+# a machine with GEMINI_ACT_MCP_ENABLED trimmed for latency, say, silently tests
+# a different agent than CI does. The env vars set above still apply.
+Settings.model_config["env_file"] = None
+
 
 @pytest.fixture
 def settings() -> Settings:

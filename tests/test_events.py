@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from gemini_act.chat import events
+from gemini_act.chat import events, live_reply
 from gemini_act.config import Settings
 from gemini_act.oauth.store import StoredToken, TokenService
 
@@ -355,24 +355,60 @@ async def _fake_reset(user_id: str, session_id: str) -> None:
     pass
 
 
-def _recording_client(posted: list[dict]):
-    class FakeClient:
-        async def post_message(self, space, body, thread_name=None, thread_key=None):
-            posted.append(
-                {"space": space, "body": body, "thread_name": thread_name, "thread_key": thread_key}
-            )
-            return {}
+class RecordingChatClient:
+    """Behaves like the real client: a post gets a name, and a name can be
+    rewritten. Replies stream, so what the user ends up looking at is usually
+    the last rewrite rather than the last post — hence `delivered`."""
 
-    return FakeClient()
+    def __init__(self) -> None:
+        self.posts: list[dict] = []
+        self.updates: list[dict] = []
+
+    async def post_message(self, space, body, thread_name=None, thread_key=None):
+        name = f"{space}/messages/m{len(self.posts) + 1}"
+        self.posts.append(
+            {
+                "space": space,
+                "body": body,
+                "thread_name": thread_name,
+                "thread_key": thread_key,
+                "name": name,
+            }
+        )
+        return {"name": name, "thread": {"name": thread_name or f"{space}/threads/auto"}}
+
+    async def update_message(self, name, body):
+        self.updates.append({"name": name, "body": body})
+        return {"name": name}
+
+    @property
+    def delivered(self) -> dict:
+        """The message body the user is left looking at."""
+        return self.updates[-1]["body"] if self.updates else self.posts[-1]["body"]
 
 
-def _reply_settings(monkeypatch, *, in_thread: bool) -> None:
+def _recording_client(monkeypatch) -> RecordingChatClient:
+    client = RecordingChatClient()
+    monkeypatch.setattr(events, "get_chat_client", lambda: client)
+    return client
+
+
+def _reply_settings(monkeypatch, *, in_thread: bool = False, streaming: bool = True) -> None:
     monkeypatch.setattr(
-        events, "get_settings", lambda: Settings(chat_reply_in_thread=in_thread), raising=True
+        events,
+        "get_settings",
+        lambda: Settings(
+            chat_reply_in_thread=in_thread,
+            chat_streaming_enabled=streaming,
+            # Every push must reach the fake, otherwise a test asserting on the
+            # stream would be racing a wall-clock throttle.
+            chat_stream_interval_seconds=0.0,
+        ),
+        raising=True,
     )
 
 
-async def _fake_answer(user_id, session_id, message):
+async def _fake_answer(user_id, session_id, message, on_progress=None):
     return "Your next meeting is at 3pm."
 
 
@@ -380,84 +416,170 @@ async def _fake_answer(user_id, session_id, message):
 async def test_run_and_reply_posts_flat_by_default(monkeypatch, space_type):
     """The answer belongs in the main window next to the question. Threading it
     made Chat collapse every exchange into a bubble the user had to expand."""
-    posted: list[dict] = []
     _reply_settings(monkeypatch, in_thread=False)
-    monkeypatch.setattr(events, "get_chat_client", lambda: _recording_client(posted))
+    client = _recording_client(monkeypatch)
     monkeypatch.setattr(events, "run_agent", _fake_answer)
 
     ctx = events.parse_event(message_event("when's my next meeting", space_type=space_type))
     await events.run_and_reply(ctx)
 
-    assert posted[0]["space"] == "spaces/AAA"
-    assert posted[0]["thread_name"] is None
-    assert posted[0]["thread_key"] is None
-    assert posted[0]["body"]["text"] == "Your next meeting is at 3pm."
+    assert client.posts[0]["space"] == "spaces/AAA"
+    assert client.posts[0]["thread_name"] is None
+    assert client.posts[0]["thread_key"] is None
+    assert client.delivered["text"] == "Your next meeting is at 3pm."
 
 
 async def test_run_and_reply_in_thread_mode_uses_stable_key_in_dm(monkeypatch):
     """Opt-in threading: a DM's incoming thread is fresh per message, so keying
     on it would fragment the conversation into one bubble per exchange."""
-    posted: list[dict] = []
     _reply_settings(monkeypatch, in_thread=True)
-    monkeypatch.setattr(events, "get_chat_client", lambda: _recording_client(posted))
+    client = _recording_client(monkeypatch)
     monkeypatch.setattr(events, "run_agent", _fake_answer)
 
     ctx = events.parse_event(message_event("when's my next meeting", space_type="DM"))
     await events.run_and_reply(ctx)
 
-    assert posted[0]["thread_key"] == "dm-AAA"
-    assert posted[0]["thread_name"] is None
+    assert client.posts[0]["thread_key"] == "dm-AAA"
+    assert client.posts[0]["thread_name"] is None
 
 
 async def test_run_and_reply_in_thread_mode_uses_incoming_thread_in_space(monkeypatch):
-    posted: list[dict] = []
     _reply_settings(monkeypatch, in_thread=True)
-    monkeypatch.setattr(events, "get_chat_client", lambda: _recording_client(posted))
+    client = _recording_client(monkeypatch)
     monkeypatch.setattr(events, "run_agent", _fake_answer)
 
     ctx = events.parse_event(message_event("when's my next meeting", space_type="SPACE"))
     await events.run_and_reply(ctx)
 
-    assert posted[0]["thread_name"] == "spaces/AAA/threads/t1"
-    assert posted[0]["thread_key"] is None
+    assert client.posts[0]["thread_name"] == "spaces/AAA/threads/t1"
+    assert client.posts[0]["thread_key"] is None
 
 
 async def test_run_and_reply_reports_timeout_instead_of_failing_silently(monkeypatch):
-    posted: list[dict] = []
+    _reply_settings(monkeypatch)
+    client = _recording_client(monkeypatch)
 
-    class FakeClient:
-        async def post_message(self, space, body, thread_name=None, thread_key=None):
-            posted.append(body)
-            return {}
-
-    async def fake_run(user_id, session_id, message):
+    async def fake_run(user_id, session_id, message, on_progress=None):
         raise TimeoutError
 
-    monkeypatch.setattr(events, "get_chat_client", lambda: FakeClient())
     monkeypatch.setattr(events, "run_agent", fake_run)
 
     await events.run_and_reply(events.parse_event(message_event()))
 
-    assert posted[0]["cardsV2"][0]["cardId"] == "error"
+    assert client.delivered["cardsV2"][0]["cardId"] == "error"
 
 
 async def test_run_and_reply_reports_agent_error(monkeypatch):
-    posted: list[dict] = []
+    _reply_settings(monkeypatch)
+    client = _recording_client(monkeypatch)
 
-    class FakeClient:
-        async def post_message(self, space, body, thread_name=None, thread_key=None):
-            posted.append(body)
-            return {}
-
-    async def fake_run(user_id, session_id, message):
+    async def fake_run(user_id, session_id, message, on_progress=None):
         raise RuntimeError("model exploded")
 
-    monkeypatch.setattr(events, "get_chat_client", lambda: FakeClient())
     monkeypatch.setattr(events, "run_agent", fake_run)
 
     await events.run_and_reply(events.parse_event(message_event()))
 
-    assert posted[0]["cardsV2"][0]["cardId"] == "error"
+    assert client.delivered["cardsV2"][0]["cardId"] == "error"
+
+
+# --- streaming the reply ---
+
+
+async def test_a_placeholder_goes_up_before_the_agent_has_written_anything(monkeypatch):
+    """The whole point: the user sees something the moment they ask, instead of
+    waiting out a multi-tool turn in silence."""
+    _reply_settings(monkeypatch)
+    client = _recording_client(monkeypatch)
+
+    async def fake_run(user_id, session_id, message, on_progress=None):
+        assert client.posts, "the placeholder must already be up when the agent starts"
+        return "done"
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    await events.run_and_reply(events.parse_event(message_event()))
+
+    assert client.posts[0]["body"]["text"] == live_reply.PLACEHOLDER
+    assert len(client.posts) == 1, "the answer rewrites the placeholder, not a second message"
+    assert client.delivered["text"] == "done"
+
+
+async def test_the_answer_is_rewritten_as_it_is_written(monkeypatch):
+    _reply_settings(monkeypatch)
+    client = _recording_client(monkeypatch)
+
+    async def fake_run(user_id, session_id, message, on_progress=None):
+        await on_progress("Your next")
+        await on_progress("Your next meeting")
+        return "Your next meeting is at 3pm."
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    await events.run_and_reply(events.parse_event(message_event()))
+
+    streamed = [update["body"]["text"] for update in client.updates]
+    assert streamed[0].startswith("Your next")
+    assert all(text.endswith(live_reply.CURSOR) for text in streamed[:-1])
+    assert streamed[-1] == "Your next meeting is at 3pm.", "the caret is gone once it is done"
+
+
+async def test_an_error_card_clears_the_half_written_text(monkeypatch):
+    """Without the empty text the abandoned sentence stays above the card."""
+    _reply_settings(monkeypatch)
+    client = _recording_client(monkeypatch)
+
+    async def fake_run(user_id, session_id, message, on_progress=None):
+        await on_progress("Let me check tha")
+        raise RuntimeError("model exploded")
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    await events.run_and_reply(events.parse_event(message_event()))
+
+    assert client.delivered["text"] == ""
+    assert client.delivered["cardsV2"][0]["cardId"] == "error"
+
+
+async def test_streaming_off_delivers_one_message_at_the_end(monkeypatch):
+    _reply_settings(monkeypatch, streaming=False)
+    client = _recording_client(monkeypatch)
+
+    async def fake_run(user_id, session_id, message, on_progress=None):
+        assert on_progress is None, "nothing to stream into, so do not stream"
+        return "Your next meeting is at 3pm."
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    await events.run_and_reply(events.parse_event(message_event()))
+
+    assert client.updates == []
+    assert client.posts[0]["body"]["text"] == "Your next meeting is at 3pm."
+
+
+async def test_a_placeholder_that_cannot_be_posted_falls_back_to_the_old_behaviour(monkeypatch):
+    """Chat being unavailable for the placeholder must not cost the answer."""
+    _reply_settings(monkeypatch)
+    posted: list[dict] = []
+
+    class HalfBrokenClient(RecordingChatClient):
+        async def post_message(self, space, body, thread_name=None, thread_key=None):
+            if body.get("text") == live_reply.PLACEHOLDER:
+                raise RuntimeError("Chat is having a moment")
+            posted.append(body)
+            return await super().post_message(space, body, thread_name, thread_key)
+
+    monkeypatch.setattr(events, "get_chat_client", lambda: HalfBrokenClient())
+
+    async def fake_run(user_id, session_id, message, on_progress=None):
+        assert on_progress is None, "there is no live message to push into"
+        return "Your next meeting is at 3pm."
+
+    monkeypatch.setattr(events, "run_agent", fake_run)
+
+    await events.run_and_reply(events.parse_event(message_event()))
+
+    assert posted == [{"text": "Your next meeting is at 3pm."}]
 
 
 # --- Google Workspace add-on payload shape ---
@@ -710,17 +832,14 @@ def _mcp_card_text(body: dict) -> str:
 
 
 @pytest.fixture
-def posted_replies(monkeypatch):
-    """Capture what the async MCP flow posts back into the chat."""
-    posted: list[dict] = []
+def posted_replies(monkeypatch) -> RecordingChatClient:
+    """Capture what the async MCP flow shows the user.
 
-    class FakeClient:
-        async def post_message(self, space, body, thread_name=None, thread_key=None):
-            posted.append(body)
-            return {}
-
-    monkeypatch.setattr(events, "get_chat_client", lambda: FakeClient())
-    return posted
+    Connecting streams too — probing is a live round trip per server — so the
+    result card usually lands as a rewrite of the "Connecting…" placeholder
+    rather than as a fresh post. `delivered` papers over which one it was.
+    """
+    return _recording_client(monkeypatch)
 
 
 async def test_connecting_probes_before_saving(registry, posted_replies, monkeypatch):
@@ -738,7 +857,7 @@ async def test_connecting_probes_before_saving(registry, posted_replies, monkeyp
 
     assert probed == ["https://mcp.acme.com/mcp"]
     assert [spec.name for spec in await registry.list("users/123")] == ["acme"]
-    assert "2 tool(s)" in _mcp_card_text(posted_replies[0])
+    assert "2 tool(s)" in _mcp_card_text(posted_replies.delivered)
 
 
 async def test_a_server_that_will_not_connect_is_not_saved(registry, posted_replies, monkeypatch):
@@ -753,7 +872,7 @@ async def test_a_server_that_will_not_connect_is_not_saved(registry, posted_repl
     await events.connect_mcp_and_reply(ctx, "https://mcp.acme.com/mcp")
 
     assert await registry.list("users/123") == []
-    assert "Failed to create MCP session" in _mcp_card_text(posted_replies[0])
+    assert "Failed to create MCP session" in _mcp_card_text(posted_replies.delivered)
 
 
 async def test_a_timeout_is_reported_as_a_timeout(registry, posted_replies, monkeypatch):
@@ -766,7 +885,7 @@ async def test_a_timeout_is_reported_as_a_timeout(registry, posted_replies, monk
     await events.connect_mcp_and_reply(ctx, "https://mcp.acme.com/mcp")
 
     assert await registry.list("users/123") == []
-    assert "answer within" in _mcp_card_text(posted_replies[0])
+    assert "answer within" in _mcp_card_text(posted_replies.delivered)
 
 
 async def test_a_server_with_no_tools_is_not_saved(registry, posted_replies, monkeypatch):
@@ -779,7 +898,7 @@ async def test_a_server_with_no_tools_is_not_saved(registry, posted_replies, mon
     await events.connect_mcp_and_reply(ctx, "https://mcp.acme.com/mcp")
 
     assert await registry.list("users/123") == []
-    assert "no tools" in _mcp_card_text(posted_replies[0])
+    assert "no tools" in _mcp_card_text(posted_replies.delivered)
 
 
 async def test_unparseable_paste_explains_itself_without_probing(
@@ -793,8 +912,8 @@ async def test_unparseable_paste_explains_itself_without_probing(
 
     await events.connect_mcp_and_reply(ctx, '{"mcpServers": {"x": {"command": "npx"}}}')
 
-    assert posted_replies[0]["cardsV2"][0]["cardId"] == "error"
-    assert "stdio" in _mcp_card_text(posted_replies[0])
+    assert posted_replies.delivered["cardsV2"][0]["cardId"] == "error"
+    assert "stdio" in _mcp_card_text(posted_replies.delivered)
 
 
 async def test_a_multi_server_config_reports_each_one(registry, posted_replies, monkeypatch):
@@ -817,7 +936,7 @@ async def test_a_multi_server_config_reports_each_one(registry, posted_replies, 
     await events.connect_mcp_and_reply(ctx, config)
 
     assert [spec.name for spec in await registry.list("users/123")] == ["good"]
-    text = _mcp_card_text(posted_replies[0])
+    text = _mcp_card_text(posted_replies.delivered)
     assert "good" in text and "broken" in text
 
 

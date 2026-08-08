@@ -9,6 +9,7 @@ from typing import Any
 from gemini_act.agent.tools import probe_server
 from gemini_act.chat import cards
 from gemini_act.chat.client import get_chat_client
+from gemini_act.chat.live_reply import PLACEHOLDER, LiveReply
 from gemini_act.config import get_settings
 from gemini_act.mcp.spec import (
     McpServerSpec,
@@ -353,8 +354,8 @@ async def _handle_message(ctx: ChatContext, schedule) -> dict[str, Any]:
     return {}
 
 
-async def _post_reply(client, ctx: ChatContext, body: dict[str, Any]) -> None:
-    """Post the agent's answer back into the conversation.
+def _thread_target(ctx: ChatContext) -> tuple[str | None, str | None]:
+    """The `(thread_name, thread_key)` a reply should be posted with.
 
     Flat by default: the answer is a new top-level message, so question and
     answer sit next to each other in the main window like any messaging app.
@@ -364,27 +365,32 @@ async def _post_reply(client, ctx: ChatContext, body: dict[str, Any]) -> None:
     for a 1:1 assistant. `chat_reply_in_thread` turns that back on for spaces
     where parallel topics genuinely need separating.
     """
-    thread_name: str | None = None
-    thread_key: str | None = None
-    if get_settings().chat_reply_in_thread:
-        # In a DM, Chat mints a fresh thread per top-level message, so the
-        # incoming `thread` would fragment the conversation; the stable
-        # app-chosen key keeps it as one. Named spaces are the opposite: the
-        # incoming thread *is* the topic the user chose to ask in.
-        thread_key = ctx.thread_key
-        thread_name = None if thread_key else (ctx.thread or None)
-    try:
-        result = await client.post_message(
-            ctx.space, body, thread_name=thread_name, thread_key=thread_key
-        )
-        logger.info(
-            "Posted reply %s into thread %s of %s",
-            result.get("name"),
-            (result.get("thread") or {}).get("name"),
-            ctx.space,
-        )
-    except Exception:
-        logger.exception("Could not post reply into %s", ctx.space)
+    if not get_settings().chat_reply_in_thread:
+        return None, None
+    # In a DM, Chat mints a fresh thread per top-level message, so the incoming
+    # `thread` would fragment the conversation; the stable app-chosen key keeps
+    # it as one. Named spaces are the opposite: the incoming thread *is* the
+    # topic the user chose to ask in.
+    thread_key = ctx.thread_key
+    return (None if thread_key else (ctx.thread or None)), thread_key
+
+
+def _live_reply(client, ctx: ChatContext, placeholder: str = PLACEHOLDER) -> LiveReply:
+    settings = get_settings()
+    thread_name, thread_key = _thread_target(ctx)
+    return LiveReply(
+        client,
+        ctx.space,
+        thread_name=thread_name,
+        thread_key=thread_key,
+        interval_seconds=settings.chat_stream_interval_seconds,
+        placeholder=placeholder,
+    )
+
+
+async def _post_reply(client, ctx: ChatContext, body: dict[str, Any]) -> None:
+    """Post a reply in one piece, for answers that are not written gradually."""
+    await _live_reply(client, ctx).finish(body)
 
 
 def _short_reason(exc: BaseException) -> str:
@@ -416,13 +422,22 @@ async def connect_mcp_and_reply(ctx: ChatContext, text: str) -> None:
     try:
         specs = parse_mcp_config(text, allowed_hosts=settings.custom_mcp_allowed_hosts)
     except McpSpecError as exc:
+        # Rejected before anything was attempted, so there is nothing to show
+        # progress for — post the error straight away.
         await _post_reply(client, ctx, cards.error_card(str(exc)))
         return
+
+    # Probing is a live round trip per server, up to `mcp_timeout_seconds` each,
+    # so this is exactly the wait that used to be silent.
+    reply = _live_reply(client, ctx, placeholder="🔌 Connecting…")
+    if settings.chat_streaming_enabled:
+        await reply.start()
 
     connected: list[tuple[McpServerSpec, list[str]]] = []
     failed: list[tuple[McpServerSpec, str]] = []
 
     for spec in specs:
+        await reply.push(f"🔌 Connecting to *{spec.name}*…")
         try:
             tools = await probe_server(spec, settings)
         except TimeoutError:
@@ -450,14 +465,29 @@ async def connect_mcp_and_reply(ctx: ChatContext, text: str) -> None:
         logger.info("User %s connected MCP server %s (%s)", ctx.user_id, spec.name, spec.host)
         connected.append((spec, tools))
 
-    await _post_reply(client, ctx, cards.mcp_result_card(connected, failed))
+    await reply.finish(cards.mcp_result_card(connected, failed))
 
 
 async def run_and_reply(ctx: ChatContext) -> None:
-    """Run the agent, then post its answer back into the thread."""
+    """Run the agent and show its answer being written.
+
+    A placeholder goes up immediately and is rewritten as the model produces
+    text. When streaming is off — or the placeholder could not be posted — the
+    run is unstreamed and the answer arrives in one piece at the end, which is
+    what `LiveReply.finish` does with a reply that was never started.
+    """
     client = get_chat_client()
+    reply = _live_reply(client, ctx)
+    if get_settings().chat_streaming_enabled:
+        await reply.start()
+
     try:
-        answer = await run_agent(ctx.user_id, ctx.session_id, ctx.text)
+        answer = await run_agent(
+            ctx.user_id,
+            ctx.session_id,
+            ctx.text,
+            on_progress=reply.push if reply.is_live else None,
+        )
         body = cards.text_message(answer)
     except TimeoutError:
         logger.warning("Agent timed out for %s in %s", ctx.user_id, ctx.space)
@@ -468,7 +498,7 @@ async def run_and_reply(ctx: ChatContext) -> None:
             "I hit an unexpected error and couldn't finish. The details are in the logs."
         )
 
-    await _post_reply(client, ctx, body)
+    await reply.finish(body)
 
 
 async def clean_conversation_and_reply(ctx: ChatContext) -> None:

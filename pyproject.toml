@@ -14,6 +14,9 @@ dependencies = [
     "google-auth>=2.38",
     "google-auth-oauthlib>=1.2",
     "google-api-python-client>=2.160",
+    # Transitively present via google-api-python-client, but imported directly
+    # in chat/client.py to give each request its own transport, so declared.
+    "google-auth-httplib2>=0.2",
     "pydantic-settings>=2.7",
     "google-cloud-firestore>=2.20",
     "itsdangerous>=2.2",

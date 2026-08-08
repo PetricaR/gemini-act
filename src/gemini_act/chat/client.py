@@ -6,6 +6,14 @@ routinely exceeds that, so the real reply is delivered asynchronously here.
 
 Auth is Application Default Credentials scoped to `chat.bot` — on Cloud Run
 that is the runtime service account, with no key file involved.
+
+Every call runs on a worker thread, and several can be in flight at once: one
+instance serves many spaces, and a streamed reply rewrites its message every
+couple of seconds for as long as the model is writing. `googleapiclient` is
+built on `httplib2`, whose `Http` object is explicitly not thread-safe — sharing
+the service's own would let two concurrent calls interleave on one connection.
+So the service object (which is only metadata, and safe to share) is built once
+and each request is given a fresh transport of its own; see `_new_http`.
 """
 
 from __future__ import annotations
@@ -16,6 +24,8 @@ from functools import lru_cache
 from typing import Any
 
 import google.auth
+import google_auth_httplib2
+import httplib2
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
@@ -23,25 +33,49 @@ from gemini_act.config import CHAT_BOT_SCOPE
 
 logger = logging.getLogger(__name__)
 
+# Message body field -> the path naming it in `spaces.messages.patch`'s
+# updateMask. The two differ: the body is JSON (`cardsV2`) while the mask names
+# proto fields (`cards_v2`), per the Chat v1 discovery document, which also
+# fixes the set of patchable fields — anything absent here cannot be updated at
+# all, only replaced by a new message.
+_UPDATE_MASK_PATHS: dict[str, str] = {
+    "text": "text",
+    "cardsV2": "cards_v2",
+    "attachment": "attachment",
+    "accessoryWidgets": "accessory_widgets",
+}
+
 
 class ChatClient:
     """Thin async wrapper over the (synchronous) Chat API client."""
 
     def __init__(self) -> None:
         self._service: Any | None = None
+        self._credentials: Any | None = None
         self._lock = asyncio.Lock()
 
     async def _get_service(self) -> Any:
         if self._service is None:
             async with self._lock:
                 if self._service is None:
-                    self._service = await asyncio.to_thread(self._build_service)
+                    self._service, self._credentials = await asyncio.to_thread(self._build_service)
         return self._service
 
     @staticmethod
-    def _build_service() -> Any:
+    def _build_service() -> tuple[Any, Any]:
         credentials, _ = google.auth.default(scopes=[CHAT_BOT_SCOPE])
-        return build("chat", "v1", credentials=credentials, cache_discovery=False)
+        service = build("chat", "v1", credentials=credentials, cache_discovery=False)
+        return service, credentials
+
+    def _new_http(self) -> Any:
+        """A transport for exactly one request — see the module docstring.
+
+        The credentials are shared deliberately: they are the expensive part (an
+        ADC lookup, then a token fetch), and google-auth is built to be reused
+        this way. Two threads racing to refresh an expired token both succeed;
+        two threads sharing one `httplib2.Http` do not.
+        """
+        return google_auth_httplib2.AuthorizedHttp(self._credentials, http=httplib2.Http())
 
     @staticmethod
     def _build_user_service(access_token: str) -> Any:
@@ -95,7 +129,41 @@ class ChatClient:
             kwargs["messageReplyOption"] = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
 
         def _execute() -> dict[str, Any]:
-            return service.spaces().messages().create(**kwargs).execute()
+            return service.spaces().messages().create(**kwargs).execute(http=self._new_http())
+
+        return await asyncio.to_thread(_execute)
+
+    async def update_message(self, name: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Rewrite a message the app already posted.
+
+        Used to stream a reply: the placeholder posted the moment the question
+        arrives is rewritten in place as the model produces text, so the user
+        watches the answer appear instead of staring at silence — see
+        `chat/live_reply.py`.
+
+        The update mask is derived from `body`, and a field that is masked but
+        absent is *cleared*. That is deliberate: swapping the streamed text for
+        a card at the end passes both keys so the half-written text goes away.
+
+        Only the app's own messages can be updated, which is all this is for.
+
+        Raises:
+            ValueError: for a body field `patch` cannot update. Failing here
+                beats a 400 from Chat halfway through a streamed reply.
+        """
+        service = await self._get_service()
+        try:
+            update_mask = ",".join(sorted(_UPDATE_MASK_PATHS[field] for field in body))
+        except KeyError as exc:
+            raise ValueError(f"Chat cannot patch the field {exc.args[0]!r}") from exc
+
+        def _execute() -> dict[str, Any]:
+            return (
+                service.spaces()
+                .messages()
+                .patch(name=name, updateMask=update_mask, body=body)
+                .execute(http=self._new_http())
+            )
 
         return await asyncio.to_thread(_execute)
 
@@ -115,7 +183,7 @@ class ChatClient:
                 service.spaces()
                 .messages()
                 .list(parent=space, pageSize=100, pageToken=token)
-                .execute()
+                .execute(http=self._new_http())
             )
 
         while True:
@@ -136,14 +204,18 @@ class ChatClient:
         `force=True` also deletes any threaded replies, so this does not fail
         when called on a thread's root message out of order.
         """
+        # A user-identity service is built fresh per call and so already owns a
+        # private transport; overriding it with `_new_http` would swap the
+        # user's credentials for the app's and delete nothing.
         service = (
             await asyncio.to_thread(self._build_user_service, access_token)
             if access_token
             else await self._get_service()
         )
+        http = None if access_token else self._new_http()
 
         def _execute() -> None:
-            service.spaces().messages().delete(name=name, force=True).execute()
+            service.spaces().messages().delete(name=name, force=True).execute(http=http)
 
         await asyncio.to_thread(_execute)
 
@@ -151,7 +223,12 @@ class ChatClient:
         service = await self._get_service()
 
         def _execute() -> list[dict[str, Any]]:
-            response = service.spaces().members().list(parent=space, pageSize=100).execute()
+            response = (
+                service.spaces()
+                .members()
+                .list(parent=space, pageSize=100)
+                .execute(http=self._new_http())
+            )
             return response.get("memberships", [])
 
         return await asyncio.to_thread(_execute)
@@ -160,7 +237,9 @@ class ChatClient:
         service = await self._get_service()
 
         def _execute() -> list[dict[str, Any]]:
-            return service.spaces().list(pageSize=100).execute().get("spaces", [])
+            return (
+                service.spaces().list(pageSize=100).execute(http=self._new_http()).get("spaces", [])
+            )
 
         return await asyncio.to_thread(_execute)
 
