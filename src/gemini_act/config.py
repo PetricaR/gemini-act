@@ -141,6 +141,13 @@ class Settings(BaseSettings):
     # (service-<number>@gcp-sa-gsuiteaddons.iam.gserviceaccount.com). Leave empty
     # only for classic Chat apps, which are issued by chat@system instead.
     project_number: str = ""
+    # Where the asynchronous answer lands. False (the default) posts it as a new
+    # top-level message, so the conversation reads as one flat running stream in
+    # the main window — the WhatsApp-style layout people expect from a chat bot.
+    # True attaches it to a thread instead, which Chat renders as a collapsed
+    # "N replies" bubble the user has to expand; only useful in a named space
+    # where several topics run in parallel. See `chat/events.py::_post_reply`.
+    chat_reply_in_thread: bool = False
 
     # OAuth
     oauth_client_id: str = ""

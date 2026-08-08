@@ -3,7 +3,7 @@
 A [Google ADK](https://adk.dev) agent that takes real actions from inside Google Chat.
 
 You DM the app or @-mention it in a space; it reasons, calls tools — your mail, calendar, Drive,
-Chat, internal APIs — and answers in the thread. Same idea as [OpenClaw](https://github.com/openclaw/openclaw)
+Chat, internal APIs — and answers in the conversation. Same idea as [OpenClaw](https://github.com/openclaw/openclaw)
 (an agent runtime bridged into a messaging platform), rebuilt on Google's stack and scoped to
 Google Workspace rather than shell access.
 

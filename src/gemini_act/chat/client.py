@@ -73,11 +73,13 @@ class ChatClient:
     ) -> dict[str, Any]:
         """Post an arbitrary message body (text and/or cards) into a space.
 
-        `thread_name` targets an existing thread resource by name — used to
-        keep a reply attached to whatever thread its triggering message
-        arrived in. `thread_key` is a caller-chosen stable string instead:
-        Chat maps it to one thread and keeps reusing it across calls, which is
-        what keeps a DM as a single continuous thread instead of fragmenting
+        With neither thread argument the message is a new top-level message in
+        the space's main stream — the default for replies, see
+        `chat/events.py::_post_reply`. `thread_name` targets an existing thread
+        resource by name, keeping a reply attached to whatever thread its
+        triggering message arrived in. `thread_key` is a caller-chosen stable
+        string instead: Chat maps it to one thread and reuses it across calls,
+        which holds a DM in a single continuous thread rather than fragmenting
         into a new one per exchange. Pass at most one; `thread_name` wins if
         both are given.
         """

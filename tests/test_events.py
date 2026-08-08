@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from gemini_act.chat import events
+from gemini_act.config import Settings
 from gemini_act.oauth.store import StoredToken, TokenService
 
 
@@ -352,11 +353,7 @@ async def _fake_reset(user_id: str, session_id: str) -> None:
     pass
 
 
-async def test_run_and_reply_posts_in_dm_uses_stable_thread_key(monkeypatch):
-    """DMs must not fragment into a new thread bubble per exchange, so the reply
-    is keyed by a stable app-chosen key, not the (possibly fresh) incoming thread."""
-    posted: list[dict] = []
-
+def _recording_client(posted: list[dict]):
     class FakeClient:
         async def post_message(self, space, body, thread_name=None, thread_key=None):
             posted.append(
@@ -364,36 +361,57 @@ async def test_run_and_reply_posts_in_dm_uses_stable_thread_key(monkeypatch):
             )
             return {}
 
-    async def fake_run(user_id, session_id, message):
-        return "Your next meeting is at 3pm."
+    return FakeClient()
 
-    monkeypatch.setattr(events, "get_chat_client", lambda: FakeClient())
-    monkeypatch.setattr(events, "run_agent", fake_run)
+
+def _reply_settings(monkeypatch, *, in_thread: bool) -> None:
+    monkeypatch.setattr(
+        events, "get_settings", lambda: Settings(chat_reply_in_thread=in_thread), raising=True
+    )
+
+
+async def _fake_answer(user_id, session_id, message):
+    return "Your next meeting is at 3pm."
+
+
+@pytest.mark.parametrize("space_type", ["DM", "SPACE"])
+async def test_run_and_reply_posts_flat_by_default(monkeypatch, space_type):
+    """The answer belongs in the main window next to the question. Threading it
+    made Chat collapse every exchange into a bubble the user had to expand."""
+    posted: list[dict] = []
+    _reply_settings(monkeypatch, in_thread=False)
+    monkeypatch.setattr(events, "get_chat_client", lambda: _recording_client(posted))
+    monkeypatch.setattr(events, "run_agent", _fake_answer)
+
+    ctx = events.parse_event(message_event("when's my next meeting", space_type=space_type))
+    await events.run_and_reply(ctx)
+
+    assert posted[0]["space"] == "spaces/AAA"
+    assert posted[0]["thread_name"] is None
+    assert posted[0]["thread_key"] is None
+    assert posted[0]["body"]["text"] == "Your next meeting is at 3pm."
+
+
+async def test_run_and_reply_in_thread_mode_uses_stable_key_in_dm(monkeypatch):
+    """Opt-in threading: a DM's incoming thread is fresh per message, so keying
+    on it would fragment the conversation into one bubble per exchange."""
+    posted: list[dict] = []
+    _reply_settings(monkeypatch, in_thread=True)
+    monkeypatch.setattr(events, "get_chat_client", lambda: _recording_client(posted))
+    monkeypatch.setattr(events, "run_agent", _fake_answer)
 
     ctx = events.parse_event(message_event("when's my next meeting", space_type="DM"))
     await events.run_and_reply(ctx)
 
-    assert posted[0]["space"] == "spaces/AAA"
     assert posted[0]["thread_key"] == "dm-AAA"
     assert posted[0]["thread_name"] is None
-    assert posted[0]["body"]["text"] == "Your next meeting is at 3pm."
 
 
-async def test_run_and_reply_posts_in_space_uses_incoming_thread(monkeypatch):
+async def test_run_and_reply_in_thread_mode_uses_incoming_thread_in_space(monkeypatch):
     posted: list[dict] = []
-
-    class FakeClient:
-        async def post_message(self, space, body, thread_name=None, thread_key=None):
-            posted.append(
-                {"space": space, "body": body, "thread_name": thread_name, "thread_key": thread_key}
-            )
-            return {}
-
-    async def fake_run(user_id, session_id, message):
-        return "Your next meeting is at 3pm."
-
-    monkeypatch.setattr(events, "get_chat_client", lambda: FakeClient())
-    monkeypatch.setattr(events, "run_agent", fake_run)
+    _reply_settings(monkeypatch, in_thread=True)
+    monkeypatch.setattr(events, "get_chat_client", lambda: _recording_client(posted))
+    monkeypatch.setattr(events, "run_agent", _fake_answer)
 
     ctx = events.parse_event(message_event("when's my next meeting", space_type="SPACE"))
     await events.run_and_reply(ctx)

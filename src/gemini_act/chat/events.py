@@ -100,10 +100,10 @@ class ChatContext:
     @property
     def thread_key(self) -> str | None:
         """A stable, app-chosen thread key for spaces where Chat mints a fresh
-        thread per top-level message (DMs) — used instead of `thread` so the
-        whole 1:1 conversation stays one continuous thread instead of a new
-        collapsed bubble per exchange. `None` outside DMs, where each incoming
-        `thread` is trusted as the topic the user actually replied in."""
+        thread per top-level message (DMs) — one continuous thread instead of a
+        new one per exchange. `None` outside DMs, where each incoming `thread`
+        is trusted as the topic the user actually replied in. Only consulted
+        when `chat_reply_in_thread` is on; replies are flat by default."""
         if self.is_dm:
             return f"dm-{self.space.rsplit('/', 1)[-1]}"
         return None
@@ -270,11 +270,29 @@ async def _handle_message(ctx: ChatContext, schedule) -> dict[str, Any]:
 
 
 async def _post_reply(client, ctx: ChatContext, body: dict[str, Any]) -> None:
+    """Post the agent's answer back into the conversation.
+
+    Flat by default: the answer is a new top-level message, so question and
+    answer sit next to each other in the main window like any messaging app.
+    Attaching it to a thread instead (either the incoming one or a stable
+    per-DM key) is what made Chat collapse every exchange into a "N replies"
+    bubble that had to be expanded to be read — correct threading, wrong shape
+    for a 1:1 assistant. `chat_reply_in_thread` turns that back on for spaces
+    where parallel topics genuinely need separating.
+    """
+    thread_name: str | None = None
+    thread_key: str | None = None
+    if get_settings().chat_reply_in_thread:
+        # In a DM, Chat mints a fresh thread per top-level message, so the
+        # incoming `thread` would fragment the conversation; the stable
+        # app-chosen key keeps it as one. Named spaces are the opposite: the
+        # incoming thread *is* the topic the user chose to ask in.
+        thread_key = ctx.thread_key
+        thread_name = None if thread_key else (ctx.thread or None)
     try:
-        if ctx.thread_key:
-            result = await client.post_message(ctx.space, body, thread_key=ctx.thread_key)
-        else:
-            result = await client.post_message(ctx.space, body, thread_name=ctx.thread or None)
+        result = await client.post_message(
+            ctx.space, body, thread_name=thread_name, thread_key=thread_key
+        )
         logger.info(
             "Posted reply %s into thread %s of %s",
             result.get("name"),
