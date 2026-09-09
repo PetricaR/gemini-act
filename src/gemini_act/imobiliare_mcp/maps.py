@@ -362,7 +362,65 @@ def static_map(lat: float, lon: float, zoom: int = 16, size: str = "640x420") ->
         return None
 
 
-def street_view(lat: float, lon: float, size: str = "640x420") -> bytes | None:
+def satellite_view(
+    lat: float, lon: float, zoom: int = 18, size: str = "640x420"
+) -> bytes | None:
+    """A high-resolution satellite/aerial image of the property and its immediate grounds."""
+    if not available():
+        return None
+    try:
+        with httpx.Client(timeout=TIMEOUT) as http:
+            r = http.get(
+                STATIC_MAP_URL,
+                params={
+                    "center": f"{lat},{lon}",
+                    "zoom": zoom,
+                    "size": size,
+                    "scale": 2,
+                    "maptype": "hybrid",
+                    "markers": f"color:red|{lat},{lon}",
+                    "language": "ro",
+                    "key": _key(),
+                },
+            )
+            if r.status_code != 200 or not r.content:
+                logger.warning("Satellite map -> %s: %s", r.status_code, r.text[:200])
+                return None
+            return r.content
+    except httpx.HTTPError:
+        logger.debug("Satellite map failed", exc_info=True)
+        return None
+
+
+def street_view_metadata(lat: float, lon: float) -> dict[str, Any] | None:
+    """Retrieve metadata about available Street View imagery (capture date, pano_id, status)."""
+    if not available():
+        return None
+    try:
+        with httpx.Client(timeout=TIMEOUT) as http:
+            r = http.get(
+                STREET_VIEW_META_URL,
+                params={"location": f"{lat},{lon}", "key": _key()},
+            )
+            if r.status_code != 200:
+                return None
+            data = r.json() or {}
+            if data.get("status") == "OK":
+                return data
+            return None
+    except (httpx.HTTPError, ValueError):
+        logger.debug("Street View metadata check failed", exc_info=True)
+        return None
+
+
+def street_view(
+    lat: float,
+    lon: float,
+    size: str = "640x420",
+    heading: int | None = None,
+    pitch: int = 10,
+    fov: int = 80,
+) -> bytes | None:
     """A photograph of the building from the street, if one exists.
 
     This is the one piece of visual evidence the seller does not control. The
@@ -378,26 +436,63 @@ def street_view(lat: float, lon: float, size: str = "640x420") -> bytes | None:
         return None
     try:
         with httpx.Client(timeout=TIMEOUT) as http:
-            meta = http.get(
-                STREET_VIEW_META_URL,
-                params={"location": f"{lat},{lon}", "key": _key()},
-            )
-            if meta.status_code != 200 or (meta.json() or {}).get("status") != "OK":
+            meta = street_view_metadata(lat, lon)
+            if not meta:
                 return None
-            r = http.get(
-                STREET_VIEW_URL,
-                params={
-                    "location": f"{lat},{lon}",
-                    "size": size,
-                    "fov": 80,
-                    "pitch": 10,
-                    "return_error_code": "true",
-                    "key": _key(),
-                },
-            )
+            params: dict[str, Any] = {
+                "location": f"{lat},{lon}",
+                "size": size,
+                "fov": fov,
+                "pitch": pitch,
+                "return_error_code": "true",
+                "key": _key(),
+            }
+            if heading is not None:
+                params["heading"] = heading
+            r = http.get(STREET_VIEW_URL, params=params)
             if r.status_code != 200 or not r.content:
                 return None
             return r.content
     except (httpx.HTTPError, ValueError):
         logger.debug("Street View failed", exc_info=True)
         return None
+
+
+def street_view_angles(
+    lat: float,
+    lon: float,
+    headings: tuple[int, ...] = (0, 90, 180, 270),
+    pitch: int = 15,
+    size: str = "640x420",
+) -> dict[int, bytes]:
+    """Fetch multi-angle Street View photographs around the given location.
+
+    Checks metadata once, then fetches images across specified headings (e.g. 360° views).
+    Returns mapping from heading degrees to image bytes.
+    """
+    if not available():
+        return {}
+    meta = street_view_metadata(lat, lon)
+    if not meta:
+        return {}
+
+    results: dict[int, bytes] = {}
+    try:
+        with httpx.Client(timeout=TIMEOUT) as http:
+            for h in headings:
+                params: dict[str, Any] = {
+                    "location": f"{lat},{lon}",
+                    "size": size,
+                    "fov": 80,
+                    "pitch": pitch,
+                    "heading": h,
+                    "return_error_code": "true",
+                    "key": _key(),
+                }
+                r = http.get(STREET_VIEW_URL, params=params)
+                if r.status_code == 200 and r.content:
+                    results[h] = r.content
+    except (httpx.HTTPError, ValueError):
+        logger.debug("street_view_angles partial failure", exc_info=True)
+    return results
+

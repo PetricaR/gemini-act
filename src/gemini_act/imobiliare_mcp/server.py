@@ -5,6 +5,7 @@ Run with:  imobiliare-mcp     (or: python -m imobiliare_mcp.server)
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -31,6 +32,8 @@ from .client import ImobiliareClient, SessionError
 from .galerie import contact_sheet
 from .parse import filter_and_rank, normalise
 from .raport import render
+
+logger = logging.getLogger(__name__)
 
 mcp = MCPServer("imobiliare")
 
@@ -586,9 +589,434 @@ def analizeaza_mobilier_si_finisaje(
     )
 
 
+@mcp.tool()
+def analizeaza_dezvoltator_si_constructor(
+    identificator_sau_nume: Annotated[
+        str,
+        Field(
+            description=(
+                "Listing ID (275807510), imobiliare.ro URL, or residential project / "
+                "developer name (e.g. 'One Floreasca Towers', 'Nusco City', 'HILS Development')"
+            )
+        ),
+    ],
+    context_suplimentar: Annotated[
+        str | None,
+        Field(description="Optional additional context, known developer name or questions"),
+    ] = None,
+) -> dict[str, Any]:
+    """Analyze developer and general contractor / builder track record, completed
+    projects, reputation, delivery delay history, utility status and risks for new builds.
+    """
+    from . import dezvoltator
+
+    target: dict[str, Any] | str = identificator_sau_nume
+    try:
+        lid = _resolve_id(identificator_sau_nume)
+        with _client() as client:
+            raw = client.hydrate([lid])
+            if raw:
+                target = normalise(raw[0])
+    except Exception:
+        target = identificator_sau_nume.strip()
+
+    return dezvoltator.analyse_developer_and_builder(
+        subject_or_name=target,
+        context_text=context_suplimentar,
+    )
+
+
+@mcp.tool()
+def analizeaza_materiale_si_specificatii_tehnice(
+    identificator_sau_nume: Annotated[
+        str,
+        Field(
+            description=(
+                "Listing ID, imobiliare.ro URL, or residential complex name / description"
+            )
+        ),
+    ],
+    include_fotografii: Annotated[
+        bool,
+        Field(description="Whether to inspect listing photos for construction materials"),
+    ] = True,
+    limita_fotografii: Annotated[
+        int, Field(description="Maximum photos to analyze (default 15)")
+    ] = 15,
+) -> dict[str, Any]:
+    """Perform a technical audit of construction materials used in a new build:
+    reinforced concrete structure, masonry, facade insulation (mineral wool vs EPS, nZEB),
+    triple glazing, underfloor heating, heat pumps/boilers, elevators and technical score.
+    """
+    from . import dezvoltator
+
+    target: dict[str, Any] | str = identificator_sau_nume
+    try:
+        lid = _resolve_id(identificator_sau_nume)
+        with _client() as client:
+            raw = client.hydrate([lid])
+            if raw:
+                target = normalise(raw[0])
+    except Exception:
+        target = identificator_sau_nume.strip()
+
+    return dezvoltator.analyse_construction_materials(
+        subject_or_name=target,
+        include_photos=include_fotografii,
+        limit=limita_fotografii,
+    )
+
+
+@mcp.tool()
+def checklist_receptie_imobil_nou(
+    etapa: Annotated[
+        str,
+        Field(
+            description=(
+                "Stage of purchase: 'antecontract' (legal checks, building permit, clauses), "
+                "'stadiu_constructie' (hidden works, conduit routes), or "
+                "'receptie_finala' (handover, screed plumbness, glazing, utilities, warranties)"
+            )
+        ),
+    ] = "receptie_finala",
+    detalii_proiect: Annotated[
+        str | None,
+        Field(description="Optional specific complex or apartment features to customize checklist"),
+    ] = None,
+) -> dict[str, Any]:
+    """Generate an actionable inspection and reception checklist for buyers of new
+    properties, including legal warranties under Romanian Law 10/1995 and common pitfalls.
+    """
+    from . import dezvoltator
+
+    return dezvoltator.generate_new_build_handover_checklist(
+        stage=etapa,
+        project_details=detalii_proiect,
+    )
+
+
+@mcp.tool()
+def analizeaza_strada_si_imprejurimi_street_view(
+    adresa_sau_identificator: Annotated[
+        str,
+        Field(
+            description=(
+                "Address (e.g. 'Calea Floreasca 160, Bucuresti'), coordinates ('44.46, 26.10'), "
+                "listing ID (e.g. '275807510') or full imobiliare.ro URL."
+            )
+        ),
+    ],
+    include_satelit: Annotated[
+        bool,
+        Field(
+            description=(
+                "Whether to also retrieve and analyze high-resolution satellite aerial imagery."
+            )
+        ),
+    ] = True,
+) -> dict[str, Any]:
+    """Capture and analyze 360-degree multi-angle Google Street View photographs
+    and high-resolution satellite imagery for an address or listing with Gemini 3.8 Flash.
+
+    Evaluates actual facade condition, insulation, enclosed balconies, AC units,
+    sidewalk quality, overhead wiring vs buried cables, on-street/sidewalk parking,
+    emergency vehicle clearance, roof condition, and privacy distance to neighbors.
+    """
+    from . import maps, viziune_strada
+
+    lat: float | None = None
+    lon: float | None = None
+    address: str = adresa_sau_identificator.strip()
+
+    # 1. Try resolving listing ID or URL
+    try:
+        lid = _resolve_id(address)
+        with _client() as client:
+            raw = client.hydrate([lid])
+            if raw:
+                r_item = raw[0]
+                sub = normalise(r_item)
+                address = (
+                    sub.get("address_text")
+                    or r_item.get("address")
+                    or sub.get("location")
+                    or sub.get("title")
+                    or address
+                )
+                if r_item.get("latitude") and r_item.get("longitude"):
+                    lat, lon = float(r_item["latitude"]), float(r_item["longitude"])
+                elif sub.get("latitude") and sub.get("longitude"):
+                    lat, lon = float(sub["latitude"]), float(sub["longitude"])
+    except Exception:
+        pass
+
+    # 2. Check if coordinates were passed directly: "44.4325, 26.1038"
+    if lat is None or lon is None:
+        parts = [p.strip() for p in address.split(",")]
+        if len(parts) == 2:
+            try:
+                c_lat, c_lon = float(parts[0]), float(parts[1])
+                if -90 <= c_lat <= 90 and -180 <= c_lon <= 180:
+                    lat, lon = c_lat, c_lon
+            except ValueError:
+                pass
+
+    # 3. Geocode address if still no coordinates
+    if lat is None or lon is None:
+        place = maps.geocode(address)
+        if place:
+            lat, lon = place.lat, place.lon
+            address = place.formatted_address or address
+
+    if lat is None or lon is None:
+        return {
+            "status": "error",
+            "message": f"Nu s-au putut determina coordonatele geografice pentru: '{address}'.",
+            "rezumat_markdown": f"> ⚠️ Nu s-a putut localiza pe hartă adresa: `{address}`.",
+        }
+
+    return viziune_strada.analyse_street_and_surroundings(
+        lat=lat,
+        lon=lon,
+        address=address,
+        include_satellite=include_satelit,
+    )
+
+
+@mcp.tool()
+def analizeaza_bonitate_dezvoltator_targetare(
+    cui_sau_nume: Annotated[
+        str,
+        Field(
+            description=(
+                "Tax identification code (CUI / CIF, e.g. '12345678' or 'RO12345678') "
+                "or full/partial company name of the developer or general contractor."
+            )
+        ),
+    ],
+) -> dict[str, Any]:
+    """Perform financial due diligence and solvency risk analysis on a real estate developer
+    or contractor using Targetare.ro financial database.
+
+    Retrieves balance sheet metrics: turnover, net profit/loss, total debt, equity,
+    employee count, CAEN code, VAT status, active/insolvent state, and computes a financial
+    health score (1-10) with buyer recommendations.
+    """
+    from . import targetare
+
+    return targetare.analizeaza_firma_targetare(cui_sau_nume)
+
+
+@mcp.tool()
+def recenzii_reputatie_google_maps(
+    nume_sau_adresa_sau_place_id: Annotated[
+        str,
+        Field(
+            description=(
+                "Complex name (e.g. 'One Cotroceni Park'), developer brand, full address, "
+                "or Google Place ID to inspect customer and resident reviews."
+            )
+        ),
+    ],
+) -> dict[str, Any]:
+    """Retrieve Google Maps reviews for a residential complex, developer showroom, or location
+    and perform an AI sentiment and red-flag audit using Gemini 3.8 Flash.
+
+    Extracts overall rating, review volume, resident complaints (construction delays, water leaks,
+    poor acoustic isolation, lack of parking, developer post-sales unresponsive), and positive aspects.
+    """
+    from . import recenzii_maps
+
+    return recenzii_maps.obtine_si_analizeaza_recenzii(nume_sau_adresa_sau_place_id)
+
+
+@mcp.tool()
+def genereaza_raport_complet_pdf(
+    adresa_sau_identificator: Annotated[
+        str,
+        Field(
+            description=(
+                "Listing ID (e.g. '275807510'), full URL from imobiliare.ro, or address. "
+                "The tool gathers valuation, vision audit, street view, developer specs, "
+                "Targetare financials, and Google reviews into a single professional PDF."
+            )
+        ),
+    ],
+    cale_salvare: Annotated[
+        str,
+        Field(description="Optional custom destination path for the PDF report"),
+    ] = "",
+) -> dict[str, Any]:
+    """Generate a comprehensive property audit and valuation dossier in PDF format,
+    designed strictly according to Google Docs professional documentation guidelines.
+
+    Includes ANEVAR GEV 630 valuation, interior finishes vision audit, 360° Street View &
+    satellite imagery, developer/contractor specs, Targetare.ro financial solvency due diligence,
+    Google Maps community reviews, and a handover inspection checklist.
+    """
+    from . import generator_pdf, recenzii_maps, targetare
+
+    # Extract listing data if possible
+    date_proprietate: dict[str, Any] = {
+        "id": "imobil",
+        "adresa": adresa_sau_identificator,
+        "titlu": f"Raport Evaluare - {adresa_sau_identificator}",
+    }
+
+    try:
+        lid = _resolve_id(adresa_sau_identificator)
+        with _client() as client:
+            raw = client.hydrate([lid])
+            if raw:
+                r_item = raw[0]
+                sub = normalise(r_item)
+                date_proprietate["id"] = lid
+                titlu_str = sub.get("title") or r_item.get("title") or f"Apartament {lid}"
+                date_proprietate["titlu"] = titlu_str
+                date_proprietate["pret_total"] = sub.get("price_eur") or r_item.get("price")
+                date_proprietate["suprafata_utila"] = (
+                    sub.get("surface_sqm") or r_item.get("surface")
+                )
+                date_proprietate["url"] = sub.get("url") or r_item.get("url")
+                date_proprietate["adresa"] = (
+                    sub.get("address_text")
+                    or r_item.get("address")
+                    or sub.get("location")
+                    or adresa_sau_identificator
+                )
+
+                # Generare foaie de contact galerie dacă sunt poze
+                try:
+                    cale_gal = contact_sheet(sub)
+                    if cale_gal:
+                        date_proprietate["cale_galerie"] = str(cale_gal)
+                except Exception:
+                    pass
+
+                # Evaluare ANEVAR sumară
+                try:
+                    eval_res = evaluare(lid)
+                    if eval_res and "estimare" in eval_res:
+                        date_proprietate["evaluare_anevar"] = {
+                            "valoare_estimata_piata": (
+                                eval_res["estimare"].get("valoare_rotunjita_eur")
+                            ),
+                            "interval_valoare_min": (
+                                eval_res["estimare"].get("interval_valoare_eur", {}).get("min")
+                            ),
+                            "interval_valoare_max": (
+                                eval_res["estimare"].get("interval_valoare_eur", {}).get("max")
+                            ),
+                            "ajustare_recomandata_procent": (
+                                eval_res["estimare"].get("diferenta_procentuala")
+                            ),
+                            "comparabile_utilizate": [
+                                {
+                                    "id": c.get("id"),
+                                    "pret": c.get("pret_eur"),
+                                    "suprafata": c.get("suprafata_mp"),
+                                    "pret_mp": c.get("pret_mp_eur"),
+                                    "ajustare_neta_procent": c.get("ajustare_totala_procent"),
+                                }
+                                for c in eval_res.get("comparabile", [])
+                            ],
+                        }
+                except Exception:
+                    pass
+
+                # Audit interior mobilier
+                try:
+                    from . import viziune
+
+                    mob_res = viziune.analyse_furniture_and_finishes(sub, limit=12)
+                    if mob_res and mob_res.get("status") == "success":
+                        date_proprietate["audit_mobilier"] = mob_res.get("analiza_calitate", {})
+                except Exception:
+                    pass
+
+                # Street View & Satelit
+                try:
+                    ext_res = analizeaza_strada_si_imprejurimi_street_view(
+                        lid, include_satelit=True
+                    )
+                    if ext_res and ext_res.get("status") == "success":
+                        date_proprietate["audit_exterior"] = ext_res.get(
+                            "analiza_vizuala_gemini", {}
+                        )
+                        date_proprietate["audit_exterior"]["imagini_salvate"] = ext_res.get(
+                            "imagini_salvate", []
+                        )
+                except Exception:
+                    pass
+
+                # Dezvoltator & Constructor
+                try:
+                    from . import dezvoltator
+
+                    dev_res = dezvoltator.extract_developer_and_constructor_info(
+                        descriere=sub.get("description") or "",
+                        titlu=sub.get("title") or "",
+                        agentie=sub.get("agency_name") or "",
+                        complex_name=sub.get("complex_name") or "",
+                    )
+                    date_proprietate["specificatii_dezvoltator"] = dev_res.get(
+                        "analiza_dezvoltator", {}
+                    )
+                    # Daca avem CUI sau nume dezvoltator, cautam pe Targetare
+                    nume_dev = date_proprietate["specificatii_dezvoltator"].get("dezvoltator")
+                    if nume_dev and nume_dev not in ("Nespecificat", "N/A"):
+                        t_res = targetare.analizeaza_firma_targetare(nume_dev)
+                        if t_res.get("status") == "success":
+                            date_proprietate["audit_targetare"] = t_res
+                except Exception:
+                    pass
+
+                # Recenzii Google Maps pentru complex sau adresa
+                try:
+                    search_query = (
+                        sub.get("complex_name")
+                        or date_proprietate.get("specificatii_dezvoltator", {}).get(
+                            "dezvoltator"
+                        )
+                        or date_proprietate["adresa"]
+                    )
+                    r_res = recenzii_maps.obtine_si_analizeaza_recenzii(search_query)
+                    if r_res.get("status") == "success":
+                        date_proprietate["recenzii_google"] = r_res
+                except Exception:
+                    pass
+
+    except Exception as exc:
+        logger.debug("Identificatorul nu este un id imobiliare.ro direct: %s", exc)
+
+    # Generare PDF prin generator_pdf
+    cale_finala = generator_pdf.genereaza_raport_complet_pdf(
+        date_proprietate,
+        cale_iesire=cale_salvare,
+    )
+
+    return {
+        "status": "success",
+        "cale_pdf": cale_finala,
+        "proprietate_id": date_proprietate.get("id"),
+        "titlu": date_proprietate.get("titlu"),
+        "mesaj": f"Raportul complet a fost compilat și exportat în: {cale_finala}",
+        "rezumat_markdown": (
+            f"### 📄 Raport de Evaluare și Audit Imobiliar Generat cu Succes\n\n"
+            f"- **Fișier PDF:** `{cale_finala}`\n"
+            f"- **Standard de Prezentare:** Ghidul Oficial de Tehnoredactare Google Docs\n"
+            f"- **Secțiuni Incluse:** Fișă tehnică, Evaluare ANEVAR (GEV 630), Audit Vizual "
+            f"Mobilier & Finisaje, Inspecție Fațadă & Stradă 360° Google Street View, "
+            f"Specificații Tehnice Dezvoltator, Due Diligence Financiar Targetare.ro, "
+            f"Recenzii Google Maps și Checklist Tehnic de Recepție."
+        ),
+    }
+
+
 def main() -> None:
     mcp.run()
 
 
 if __name__ == "__main__":
     main()
+

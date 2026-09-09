@@ -467,6 +467,290 @@ async def analizeaza_mobilier_si_finisaje(
     return {"status": "success", **result}
 
 
+async def analizeaza_dezvoltator_si_constructor(
+    identificator_sau_nume: str,
+    context_suplimentar: str | None = None,
+) -> dict[str, Any]:
+    """Analizează profilul dezvoltatorului imobiliar și al constructorului / antreprenorului
+    general pentru un imobil nou sau ansamblu rezidențial.
+
+    Evaluează istoricul de proiecte finalizate, reputația pe piață, calitatea lucrărilor
+    executate, comportamentul privind termenele de predare (întârzieri), situația autorizațiilor
+    și branșamentelor la utilități definitive, precum și scorul de încredere (1-10).
+
+    Args:
+        identificator_sau_nume: ID-ul anunțului (ex: '275807510'), URL-ul ofertei imobiliare.ro,
+            sau numele direct al ansamblului / dezvoltatorului (ex: 'One Floreasca Towers').
+        context_suplimentar: Informații sau întrebări contextuale suplimentare opționale.
+
+    Returns:
+        Date structurate despre dezvoltator, constructor, stadiu, riscuri și raport Markdown.
+    """
+    if not get_settings().imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import (
+            analizeaza_dezvoltator_si_constructor as server_tool,
+        )
+
+        return server_tool(
+            identificator_sau_nume=identificator_sau_nume,
+            context_suplimentar=context_suplimentar,
+        )
+
+    try:
+        result = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Developer and builder analysis", exc)
+
+    if error := result.get("error"):
+        return {"status": "error", "error_message": error}
+
+    return {"status": "success", **result}
+
+
+async def analizeaza_materiale_si_specificatii_tehnice(
+    identificator_sau_nume: str,
+    include_fotografii: bool = True,
+    limita_fotografii: int = 15,
+) -> dict[str, Any]:
+    """Realizează un audit tehnic al materialelor de construcție folosite la un imobil nou.
+
+    Analizează structura de rezistență (cadre beton armat, radier, P100-1), zidăria și
+    izolația fonică (cărămidă termoizolantă vs BCA), fațada și termoizolația (vată bazaltică
+    vs polistiren, nZEB), tâmplăria exterioară (tripan Low-E), instalațiile (încălzire în
+    pardoseală, pompe de căldură) și finisajele spațiilor comune, acordând un scor tehnic (1-10).
+
+    Args:
+        identificator_sau_nume: ID-ul anunțului, URL-ul ofertei sau numele proiectului rezidențial.
+        include_fotografii: Dacă să inspecteze și fotografiile disponibile pentru validarea vizuală.
+        limita_fotografii: Numărul maxim de fotografii inspectate (implicit 15).
+
+    Returns:
+        Fișa tehnică structurată pe capitole de construcție, puncte forte, potențiale
+        compromisuri tehnice (cost-cutting) și raport complet Markdown.
+    """
+    if not get_settings().imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import (
+            analizeaza_materiale_si_specificatii_tehnice as server_tool,
+        )
+
+        return server_tool(
+            identificator_sau_nume=identificator_sau_nume,
+            include_fotografii=include_fotografii,
+            limita_fotografii=limita_fotografii,
+        )
+
+    try:
+        result = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Construction materials audit", exc)
+
+    if error := result.get("error"):
+        return {"status": "error", "error_message": error}
+
+    return {"status": "success", **result}
+
+
+async def checklist_receptie_imobil_nou(
+    etapa: str = "receptie_finala",
+    detalii_proiect: str | None = None,
+) -> dict[str, Any]:
+    """Generează un ghid și checklist practic de verificare pentru cumpărători la achiziția
+    și recepția unui apartament într-un imobil nou.
+
+    Acoperă 3 etape cheie:
+    - 'antecontract': verificare acte proprietate, autorizație, utilități definitive;
+    - 'stadiu_constructie': verificări pe șantier, procese verbale lucrări ascunse;
+    - 'receptie_finala': predare-primire, planeitate șape, unghiuri pereți, etanșeitate tâmplărie,
+      presiune instalații sanitare, tablou electric, utilități individuale și garanții legale.
+
+    Args:
+        etapa: Etapa achiziției ('antecontract', 'stadiu_constructie' sau 'receptie_finala').
+        detalii_proiect: Opțional, dotări specifice ale proiectului pentru personalizare.
+
+    Returns:
+        Checklist structurat pe categorii, capcane frecvente, garanții legale și raport Markdown.
+    """
+    if not get_settings().imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import (
+            checklist_receptie_imobil_nou as server_tool,
+        )
+
+        return server_tool(
+            etapa=etapa,
+            detalii_proiect=detalii_proiect,
+        )
+
+    try:
+        result = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("New build handover checklist", exc)
+
+    if error := result.get("error"):
+        return {"status": "error", "error_message": error}
+
+    return {"status": "success", **result}
+
+
+async def analizeaza_strada_si_imprejurimi_street_view(
+    adresa_sau_identificator: str,
+    include_satelit: bool = True,
+) -> dict[str, Any]:
+    """Capturează și analizează imagini Google Street View 360° și imagini satelitare
+    de înaltă rezoluție pentru o adresă sau anunț imobiliar cu Gemini 3.8 Flash.
+
+    Evaluează fațada reală a clădirii, starea tencuielii, izolația exterioară, balcoanele,
+    trotuarele, parcarea (inclusiv mașini pe trotuar), cablurile aeriene, ambientul urban
+    și distanța de intimitate față de vecini din satelit.
+
+    Args:
+        adresa_sau_identificator: Adresă completă (ex: 'Calea Floreasca 160, Bucuresti'),
+            coordonate ('44.46, 26.10'), ID anunț (ex: '275807510') sau URL complet imobiliare.ro.
+        include_satelit: Dacă se include și analiza vederii aeriene din satelit (implicit True).
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import (
+            analizeaza_strada_si_imprejurimi_street_view as server_tool,
+        )
+
+        return server_tool(
+            adresa_sau_identificator=adresa_sau_identificator,
+            include_satelit=include_satelit,
+        )
+
+    try:
+        result = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Street view and surroundings analysis", exc)
+
+    if error := result.get("error"):
+        return {"status": "error", "error_message": error}
+
+    return {"status": "success", **result}
+
+
+async def analizeaza_bonitate_dezvoltator_targetare(
+    cui_sau_nume: str,
+) -> dict[str, Any]:
+    """Efectuează due diligence financiar și analiză de bonitate/risc de insolvență
+    pentru un dezvoltator imobiliar sau constructor folosind baza Targetare.ro.
+
+    Interoghează datele oficiale de bilanț (cifră de afaceri, profit net, datorii totale,
+    capitaluri proprii, număr de angajați, cod CAEN, stare activ/insolvent/radiat) și
+    calculează un scor de stabilitate financiară (1-10) cu recomandări pentru cumpărător.
+
+    Args:
+        cui_sau_nume: Codul de identificare fiscală (CUI / CIF) sau denumirea companiei.
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import (
+            analizeaza_bonitate_dezvoltator_targetare as server_tool,
+        )
+
+        return server_tool(cui_sau_nume=cui_sau_nume)
+
+    try:
+        result = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Targetare financial due diligence", exc)
+
+    if error := result.get("error"):
+        return {"status": "error", "error_message": error}
+
+    return {"status": "success", **result}
+
+
+async def recenzii_reputatie_google_maps(
+    nume_sau_adresa_sau_place_id: str,
+) -> dict[str, Any]:
+    """Obține recenzii Google Maps pentru un ansamblu rezidențial, birou de vânzări dezvoltator
+    sau adresă și realizează un audit de reputație și sentiment cu Gemini 3.8 Flash.
+
+    Extrage ratingul mediu, volumul de recenzii, problemele reclamate frecvent de locatari
+    (întârzieri la predare, infiltrații, izolație fonică deficitară, parcări insuficiente)
+    și punctele forte apreciate.
+
+    Args:
+        nume_sau_adresa_sau_place_id: Nume ansamblu, brand dezvoltator, adresă sau Google Place ID.
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import (
+            recenzii_reputatie_google_maps as server_tool,
+        )
+
+        return server_tool(nume_sau_adresa_sau_place_id=nume_sau_adresa_sau_place_id)
+
+    try:
+        result = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Google Maps reviews reputation audit", exc)
+
+    if error := result.get("error"):
+        return {"status": "error", "error_message": error}
+
+    return {"status": "success", **result}
+
+
+async def genereaza_raport_complet_pdf(
+    adresa_sau_identificator: str,
+    cale_salvare: str = "",
+) -> dict[str, Any]:
+    """Generează un dosar complet de audit și evaluare imobiliară în format PDF profesional,
+    respectând cu strictețe ghidul de tehnoredactare și design Google Docs.
+
+    Include evaluare ANEVAR (GEV 630), audit vizual mobilier și finisaje, inspecție Street View 360°
+    și satelit, specificații dezvoltator, analiză financiară Targetare.ro, recenzii Google Maps
+    și checklist tehnic de recepție.
+
+    Args:
+        adresa_sau_identificator: ID anunț, URL complet imobiliare.ro sau adresă proprietate.
+        cale_salvare: Cale personalizată de salvare pentru fișierul PDF (opțional).
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import (
+            genereaza_raport_complet_pdf as server_tool,
+        )
+
+        return server_tool(
+            adresa_sau_identificator=adresa_sau_identificator,
+            cale_salvare=cale_salvare,
+        )
+
+    try:
+        result = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Complete PDF report generation", exc)
+
+    if error := result.get("error"):
+        return {"status": "error", "error_message": error}
+
+    return {"status": "success", **result}
+
+
 IMOBILIARE_TOOLS = [
     cauta_proprietati,
     reia_cautare,
@@ -475,6 +759,14 @@ IMOBILIARE_TOOLS = [
     evalueaza_proprietate,
     inspecteaza_vizual_proprietate,
     analizeaza_mobilier_si_finisaje,
+    analizeaza_dezvoltator_si_constructor,
+    analizeaza_materiale_si_specificatii_tehnice,
+    checklist_receptie_imobil_nou,
+    analizeaza_strada_si_imprejurimi_street_view,
+    analizeaza_bonitate_dezvoltator_targetare,
+    recenzii_reputatie_google_maps,
+    genereaza_raport_complet_pdf,
 ]
+
 
 
