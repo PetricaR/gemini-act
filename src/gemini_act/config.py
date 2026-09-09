@@ -183,10 +183,10 @@ class Settings(BaseSettings):
     # are declared with explicit aliases rather than the GEMINI_ACT_ prefix.
     project: str = Field(default="", alias="GOOGLE_CLOUD_PROJECT")
     # Gemini 3.x is served from the `global` Vertex endpoint, not a regional one —
-    # gemini-3.6-flash 404s in europe-west1 and resolves at global. This is
+    # gemini-3.8-flash 404s in europe-west1 and resolves at global. This is
     # independent of the Cloud Run region and of where Firestore lives.
     location: str = Field(default="global", alias="GOOGLE_CLOUD_LOCATION")
-    model: str = "gemini-3.6-flash"
+    model: str = "gemini-3.8-flash"
     # How hard the model thinks before it answers. This is the single largest
     # lever on how long a user waits: Gemini 3.x thinks on *every* LLM call, and
     # one turn that uses tools is several of those, so the cost is paid three to
@@ -302,9 +302,58 @@ class Settings(BaseSettings):
         "storage",
     )
 
+    # Property analysis (`agent/tools/imobiliare.py`, `imobiliare_mcp/`).
+    # Search needs a browser-captured session and is therefore unreliable; the
+    # valuation path deliberately does not — it sources comparables from the
+    # published sitemaps and hydrates them unauthenticated, so it works headless.
+    imobiliare_enabled: bool = True
+    # Captured from a browser (DevTools > Network > /api/search > request body).
+    # Expires after a few minutes, so `cauta` is best-effort and everything that
+    # matters (`detalii`, `evaluare`) is built to work without it.
+    imobiliare_session_id: str = ""
+    # Comparables carried into the GEV 630 §54-58 grid. More is not better: the
+    # grid weights by similarity anyway, and each one is an extra hydrate row.
+    imobiliare_comparables: int = 12
+    # How many listing photos go to the vision model. The whole gallery would be
+    # 30-40 images on a well-photographed offer; the first two dozen already
+    # cover every room, and each one is tokens and latency on the critical path.
+    imobiliare_max_photos: int = 24
+    # Let the model actually look at the photographs rather than being handed a
+    # file path it cannot open — see `imobiliare_mcp/viziune.py`. Off falls back
+    # to the previous behaviour, where the report's visual section is only
+    # whatever the calling agent chose to write into it.
+    imobiliare_vision_enabled: bool = True
+    # Model used for that pass. Split from `model` on purpose: the vision call is
+    # a single stateless request with no tools, so it can be pinned or downgraded
+    # independently of whatever serves the conversation.
+    imobiliare_vision_model: str = "gemini-3.8-flash"
+
+    # Google Maps Platform key, used server-side by the valuation pipeline for
+    # geocoding, amenities, travel times and the location map — see
+    # `imobiliare_mcp/maps.py`.
+    #
+    # This is deliberately NOT the `maps` Workspace MCP server above. That one is
+    # per-user OAuth and only reachable from inside an agent turn, which is no use
+    # to code that runs server-side during a valuation. The two are complementary:
+    # the MCP server answers a user's location questions conversationally, this
+    # key backs the report's own measurements.
+    #
+    # Empty is a supported configuration, not a broken one: everything degrades to
+    # the OpenStreetMap path (Nominatim + Overpass) that `imobiliare_mcp/locatie.py`
+    # already implements, which is free but coarser and much slower.
+    maps_api_key: str = ""
+    # Radius for the amenity search around the property, metres.
+    maps_amenity_radius_m: int = 1200
+
     # Agent run budget, seconds. Chat's own sync window is ~30s, but we answer
     # asynchronously so the agent may take longer than that.
-    agent_timeout_seconds: float = 180.0
+    #
+    # Raised well past the old 180s for the valuation path: one `evaluare` call
+    # hydrates a comparable pool, geocodes, queries amenities, downloads a gallery
+    # and makes a vision call, and the whole thing is one tool call the model
+    # waits on. Ordinary chat turns are unaffected — this is a ceiling, not a
+    # delay.
+    agent_timeout_seconds: float = 540.0
 
     # Per-call budget for the Workspace MCP servers. ADK's default is 5s, which
     # these servers routinely exceed — observed 6-25s for a single tools/list,

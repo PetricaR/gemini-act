@@ -24,7 +24,7 @@ REGION="${CLOUD_RUN_REGION:-europe-west1}"
 VERTEX_LOCATION="${GOOGLE_CLOUD_LOCATION:-global}"
 SERVICE="${SERVICE_NAME:-gemini-act}"
 SA_EMAIL="${SERVICE_ACCOUNT_NAME:-gemini-act-runtime}@${PROJECT}.iam.gserviceaccount.com"
-MODEL="${GEMINI_ACT_MODEL:-gemini-3.6-flash}"
+MODEL="${GEMINI_ACT_MODEL:-gemini-3.8-flash}"
 # Pins the Workspace add-on token issuer, and is needed before the first deploy.
 PROJECT_NUM="$(gcloud projects describe "${PROJECT}" --format='value(projectNumber)')"
 # ADK defaults GOOGLE_API_USE_CLIENT_CERTIFICATE to "true" (google-auth defaults

@@ -20,7 +20,20 @@ dependencies = [
     "pydantic-settings>=2.7",
     "google-cloud-firestore>=2.20",
     "itsdangerous>=2.2",
+    # Runtime, not just tests: the property tools under `imobiliare_mcp/` and the
+    # Maps calls in `imobiliare_mcp/maps.py` use it directly. The system python
+    # on macOS ships without CA certificates, which is why that package uses
+    # httpx (bundles certifi) rather than urllib — see imobiliare_mcp/CLAUDE.md.
+    "httpx>=0.28",
+    # Folds a listing's gallery into one contact sheet (`imobiliare_mcp/galerie.py`).
+    # Optional at import time — the sheet is skipped if it is missing — but the
+    # report is meaningfully worse without it, so it is declared.
+    "pillow>=11.0",
 ]
+
+[project.scripts]
+gemini-act = "gemini_act.chat.app:main"
+imobiliare-mcp = "gemini_act.imobiliare_mcp.server:main"
 
 [dependency-groups]
 dev = [
@@ -48,3 +61,21 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# The valuation engine and its report renderer are vendored from a standalone
+# MCP server (see src/gemini_act/imobiliare_mcp/CLAUDE.md) and were written to a
+# wider line budget. Their long lines are almost entirely Romanian report
+# strings and the GEV 630 adjustment table, where the existing line breaks track
+# the standard's own structure — rewrapping them would be a large diff through
+# working valuation logic for no reading benefit, and would fight the next
+# update from upstream.
+#
+# Only E501 is waived, and only here: every other rule applies to this package
+# as it does everywhere else, and new modules in it (maps.py, viziune.py) are
+# held to the project's 100-column limit.
+"src/gemini_act/imobiliare_mcp/anevar.py" = ["E501"]
+"src/gemini_act/imobiliare_mcp/comps.py" = ["E501"]
+"src/gemini_act/imobiliare_mcp/locatie.py" = ["E501"]
+"src/gemini_act/imobiliare_mcp/raport.py" = ["E501"]
+"src/gemini_act/imobiliare_mcp/server.py" = ["E501"]

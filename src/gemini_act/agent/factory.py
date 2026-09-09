@@ -13,6 +13,8 @@ from gemini_act.agent.prompts import build_instruction
 from gemini_act.agent.tools import (
     BUSINESS_TOOLS,
     CHAT_TOOLS,
+    IMOBILIARE_TOOLS,
+    MAPS_TOOLS,
     CustomMcpToolset,
     build_search_tools,
     build_workspace_toolsets,
@@ -59,6 +61,12 @@ def build_agent(
     """
     settings = settings or get_settings()
     tools: list[Any] = [*BUSINESS_TOOLS, *CHAT_TOOLS, *build_search_tools(settings)]
+    if settings.imobiliare_enabled:
+        # In-process, unlike everything below it — see `agent/tools/imobiliare.py`
+        # for why a vendored MCP server is called directly rather than spoken to.
+        tools.extend(IMOBILIARE_TOOLS)
+    if settings.maps_api_key:
+        tools.extend(MAPS_TOOLS)
     tools.extend(build_workspace_toolsets(settings, token_service))
     if settings.custom_mcp_enabled and mcp_registry is not None:
         # Resolves per turn against the calling user, so this single toolset
@@ -66,11 +74,14 @@ def build_agent(
         tools.append(CustomMcpToolset(mcp_registry, settings))
 
     logger.info(
-        "Built agent on %s with %d tool group(s), thinking %s, workspace access %s",
+        "Built agent on %s with %d tool group(s), thinking %s, workspace access %s, "
+        "property tools %s, maps %s",
         settings.model,
         len(tools),
         settings.thinking_level or "default",
         "on" if token_service else "off",
+        "on" if settings.imobiliare_enabled else "off",
+        "key" if settings.maps_api_key else "openstreetmap",
     )
     return Agent(
         name="gemini_act",

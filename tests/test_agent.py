@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from gemini_act.agent.factory import build_agent
-from gemini_act.agent.tools import business, search, workspace_mcp
+from gemini_act.agent.tools import IMOBILIARE_TOOLS, business, search, workspace_mcp
 from gemini_act.config import (
     MCP_ENDPOINT_OVERRIDES,
     MCP_SCOPES,
@@ -128,18 +128,34 @@ def test_empty_thinking_level_leaves_the_model_default_alone():
     assert agent.generate_content_config.thinking_config is None
 
 
+def _base_tool_count() -> int:
+    """Everything the agent ships with regardless of who is asking: business
+    tools, the three Chat tools, search, and the property tools."""
+    return len(business.BUSINESS_TOOLS) + 3 + 1 + len(IMOBILIARE_TOOLS)
+
+
 def test_anonymous_agent_omits_workspace_toolsets():
     """`adk web` has no Chat user, so per-user MCP servers must be left out."""
     agent = build_agent(_settings(), token_service=None)
-    assert len(agent.tools) == len(business.BUSINESS_TOOLS) + 3 + 1  # + chat tools + search
+    assert len(agent.tools) == _base_tool_count()
+
+
+def test_property_tools_are_gated_on_their_flag():
+    """The whole property feature is one switch — it pulls in network calls and
+    a vision model, so a deployment that does not want it must be able to say so."""
+    on = build_agent(_settings(imobiliare_enabled=True), token_service=None)
+    off = build_agent(_settings(imobiliare_enabled=False), token_service=None)
+    assert len(on.tools) - len(off.tools) == len(IMOBILIARE_TOOLS)
+    assert not any(
+        getattr(t, "__name__", "") == "evalueaza_proprietate" for t in off.tools
+    )
 
 
 def test_agent_with_token_service_adds_one_toolset_per_enabled_server(token_service, monkeypatch):
     monkeypatch.setattr(workspace_mcp, "AgentRegistry", FakeAgentRegistry)
     settings = _settings(mcp_enabled="gmail,calendar")
     agent = build_agent(settings, token_service=token_service)
-    base = len(business.BUSINESS_TOOLS) + 3 + 1
-    assert len(agent.tools) == base + 2
+    assert len(agent.tools) == _base_tool_count() + 2
 
 
 def test_workspace_toolsets_are_empty_without_a_token_service():
@@ -336,10 +352,13 @@ def test_instruction_carries_todays_date():
     or "today" silently drifts on a long-lived instance."""
     from datetime import UTC, datetime
 
-    from gemini_act.agent.prompts import build_instruction
+    from gemini_act.agent.prompts import EET, build_instruction
 
     text = build_instruction()
-    assert datetime.now(UTC).strftime("%Y-%m-%d") in text
+    assert (
+        datetime.now(UTC).strftime("%Y-%m-%d") in text
+        or datetime.now(EET).strftime("%Y-%m-%d") in text
+    )
     assert "Gemini Act" in text
 
 

@@ -34,6 +34,11 @@ MARKER = "---chat_attachment_JSON---"
 
 _REQUIRED_KEYS = ("filename", "mimeType", "contentBase64")
 
+# The other accepted shape: a token from `chat/artifacts.py` standing in for
+# bytes a *tool* produced, which the model must not have to carry itself. See
+# that module for why a report cannot go through the conversation as base64.
+_ARTIFACT_KEY = "artifactId"
+
 
 @dataclass(frozen=True)
 class ReplyAttachment:
@@ -57,11 +62,20 @@ def split_reply_attachment(text: str) -> tuple[str, str]:
 def parse_reply_attachment(raw: str, *, max_bytes: int) -> ReplyAttachment | None:
     """Parse and decode the JSON blob `split_reply_attachment` returned.
 
+    Two payload shapes are accepted:
+
+    * `{filename, mimeType, contentBase64}` — the model composed the file
+      itself, and its bytes are inline;
+    * `{artifactId}` — a tool produced the file and stored it in
+      `chat/artifacts.py`; the model is only naming it. `filename` and
+      `mimeType` may be given but the stored ones win, since the tool that
+      wrote the file knows them and the model is repeating them from memory.
+
     `None` covers every way this can be unusable — malformed JSON, a missing
-    field, base64 that does not decode, or a file over `max_bytes` — so the
-    caller has one thing to check rather than a set of exceptions to catch.
-    A model getting this wrong must degrade to "no attachment", never break
-    the reply it is attached to.
+    field, base64 that does not decode, an expired or already-spent token, or a
+    file over `max_bytes` — so the caller has one thing to check rather than a
+    set of exceptions to catch. A model getting this wrong must degrade to "no
+    attachment", never break the reply it is attached to.
     """
     import json
 
@@ -69,7 +83,21 @@ def parse_reply_attachment(raw: str, *, max_bytes: int) -> ReplyAttachment | Non
         payload = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
         return None
-    if not isinstance(payload, dict) or not all(k in payload for k in _REQUIRED_KEYS):
+    if not isinstance(payload, dict):
+        return None
+
+    if token := payload.get(_ARTIFACT_KEY):
+        from gemini_act.chat.artifacts import take
+
+        if not isinstance(token, str) or not (stored := take(token)):
+            return None
+        if len(stored.data) > max_bytes:
+            return None
+        return ReplyAttachment(
+            filename=stored.filename, mime_type=stored.mime_type, data=stored.data
+        )
+
+    if not all(k in payload for k in _REQUIRED_KEYS):
         return None
 
     filename, mime_type, content_b64 = (payload[k] for k in _REQUIRED_KEYS)
