@@ -713,6 +713,7 @@ async def recenzii_reputatie_google_maps(
 
 async def genereaza_raport_complet_pdf(
     adresa_sau_identificator: str,
+    date_suplimentare_json: str = "",
     cale_salvare: str = "",
 ) -> dict[str, Any]:
     """Generează un dosar complet de audit și evaluare imobiliară în format PDF profesional,
@@ -724,6 +725,7 @@ async def genereaza_raport_complet_pdf(
 
     Args:
         adresa_sau_identificator: ID anunț, URL complet imobiliare.ro sau adresă proprietate.
+        date_suplimentare_json: JSON opțional cu rezultatele uneltelor pre-colectate de agent.
         cale_salvare: Cale personalizată de salvare pentru fișierul PDF (opțional).
     """
     settings = get_settings()
@@ -737,6 +739,7 @@ async def genereaza_raport_complet_pdf(
 
         return server_tool(
             adresa_sau_identificator=adresa_sau_identificator,
+            date_suplimentare_json=date_suplimentare_json,
             cale_salvare=cale_salvare,
         )
 
@@ -744,6 +747,47 @@ async def genereaza_raport_complet_pdf(
         result = await asyncio.to_thread(work)
     except Exception as exc:  # noqa: BLE001
         return _failure("Complete PDF report generation", exc)
+
+    if error := result.get("error"):
+        return {"status": "error", "error_message": error}
+
+    return {"status": "success", **result}
+
+
+async def analizeaza_electrocasnice_si_defecte_finisaje(
+    identificator_proprietate: str,
+    limita_fotografii: int = 20,
+) -> dict[str, Any]:
+    """Examinează fotografiile proprietății cu Gemini 3.8 Flash Vision pentru a:
+    1. Recunoaște aparatele electrocasnice (frigider, cuptor, plită, hotă, mașină spălat, AC, TV).
+    2. Identifica brandul (Miele, Bosch, etc.) și gama (Economic/Mid-range/Premium/Ultra-Lux).
+    3. Estima prețul de nou pe piața din România (EUR/RON) și valoarea reziduală actuală.
+    4. Genera link-uri directe de căutare online (eMAG, Altex, Google Shopping).
+    5. Audita defectele finisajelor (fisuri, infiltrații, plăci ciobite, parchet umflat,
+       plinte lipsă, mucegai) cu severitate și buget de remediere.
+
+    Args:
+        identificator_proprietate: ID anunț sau URL complet imobiliare.ro.
+        limita_fotografii: Număr maxim de imagini analizate (implicit 20).
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import (
+            analizeaza_electrocasnice_si_defecte_finisaje as server_tool,
+        )
+
+        return server_tool(
+            identificator_proprietate=identificator_proprietate,
+            limita_fotografii=limita_fotografii,
+        )
+
+    try:
+        result = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Electrocasnice & defecte finisaje audit", exc)
 
     if error := result.get("error"):
         return {"status": "error", "error_message": error}
@@ -759,6 +803,7 @@ IMOBILIARE_TOOLS = [
     evalueaza_proprietate,
     inspecteaza_vizual_proprietate,
     analizeaza_mobilier_si_finisaje,
+    analizeaza_electrocasnice_si_defecte_finisaje,
     analizeaza_dezvoltator_si_constructor,
     analizeaza_materiale_si_specificatii_tehnice,
     checklist_receptie_imobil_nou,

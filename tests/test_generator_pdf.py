@@ -1,9 +1,15 @@
-"""Unit tests for professional PDF report generator module."""
-
+import asyncio
+import json
 import os
 from pathlib import Path
 
+from gemini_act.agent.tools.imobiliare import (
+    genereaza_raport_complet_pdf as agent_genereaza_pdf,
+)
 from gemini_act.imobiliare_mcp.generator_pdf import genereaza_raport_complet_pdf
+from gemini_act.imobiliare_mcp.server import (
+    genereaza_raport_complet_pdf as server_genereaza_pdf,
+)
 
 
 def test_genereaza_raport_complet_pdf(tmp_path: Path) -> None:
@@ -108,3 +114,45 @@ def test_genereaza_raport_complet_pdf_minimal(tmp_path: Path) -> None:
     cale_rezultat = genereaza_raport_complet_pdf(minimal_data, cale_iesire=dest_pdf)
     assert os.path.exists(cale_rezultat)
     assert os.path.getsize(cale_rezultat) > 1000
+
+
+def test_server_genereaza_raport_complet_pdf_cu_date_suplimentare(tmp_path: Path) -> None:
+    dest_pdf = str(tmp_path / "test_server_pdf.pdf")
+    extra_data = {
+        "titlu": "Apartament Lux Floreasca",
+        "pret_total": 220000,
+        "suprafata_utila": 75,
+        "evaluare_anevar": {
+            "valoare_estimata_piata": 215000,
+            "interval_valoare_min": 205000,
+            "interval_valoare_max": 225000,
+            "ajustare_recomandata_procent": -2.2,
+        },
+    }
+    res = server_genereaza_pdf(
+        adresa_sau_identificator="Calea Floreasca 10, Bucuresti",
+        date_suplimentare_json=json.dumps(extra_data),
+        cale_salvare=dest_pdf,
+    )
+    assert res["status"] == "success"
+    assert os.path.exists(res["cale_pdf"])
+    assert os.path.getsize(res["cale_pdf"]) > 1000
+
+
+def test_agent_tool_genereaza_raport_complet_pdf(tmp_path: Path) -> None:
+    dest_pdf = str(tmp_path / "test_agent_pdf.pdf")
+    extra_data = {
+        "titlu": "Apartament 3 Camere Aviatiei",
+        "pret_total": 185000,
+        "suprafata_utila": 68,
+    }
+
+    res = asyncio.run(
+        agent_genereaza_pdf(
+            adresa_sau_identificator="Strada Nicolae Caramfil 20, Bucuresti",
+            date_suplimentare_json=json.dumps(extra_data),
+            cale_salvare=dest_pdf,
+        )
+    )
+    assert res["status"] == "success"
+    assert os.path.exists(res["cale_pdf"])

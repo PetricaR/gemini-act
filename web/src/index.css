@@ -1,0 +1,142 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: light;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-canvas text-slate-800 font-sans;
+  }
+
+  /* Section anchors clear the sticky header when jumped to. */
+  [id] {
+    scroll-margin-top: 5.5rem;
+  }
+}
+
+@layer components {
+  /* One card shape for the whole report, so every section reads as a page of
+     the same document rather than a separate widget. */
+  .card {
+    @apply bg-white rounded-2xl border border-slate-200 shadow-card;
+  }
+
+  .card-pad {
+    @apply p-5 sm:p-6;
+  }
+
+  .card-head {
+    @apply flex flex-col gap-4 pb-5 mb-5 border-b border-slate-200
+           sm:flex-row sm:items-center sm:justify-between;
+  }
+
+  .section-title {
+    @apply text-base sm:text-lg font-bold text-slate-900 tracking-tight;
+  }
+
+  .section-sub {
+    @apply text-xs text-slate-500 leading-relaxed mt-0.5;
+  }
+
+  .label {
+    @apply text-[11px] font-semibold uppercase tracking-wider text-slate-500;
+  }
+
+  .stat {
+    @apply rounded-xl border border-slate-200 bg-slate-50/70 p-3.5;
+  }
+
+  .stat-value {
+    @apply text-lg sm:text-xl font-extrabold text-slate-900 mt-1 tabular-nums;
+  }
+
+  .stat-note {
+    @apply text-[11px] text-slate-500 mt-0.5;
+  }
+
+  .pill {
+    @apply inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1
+           rounded-full border;
+  }
+
+  .icon-tile {
+    @apply p-2 rounded-xl border flex items-center justify-center flex-shrink-0;
+  }
+
+  .data-table {
+    @apply w-full text-xs text-left border-separate border-spacing-0;
+  }
+
+  .data-table thead th {
+    @apply pb-2 pt-1 px-3 font-semibold text-slate-500 border-b border-slate-200
+           whitespace-nowrap;
+  }
+
+  .data-table tbody td {
+    @apply py-2.5 px-3 border-b border-slate-100 text-slate-700 align-top;
+  }
+
+  .data-table tbody tr:hover td {
+    @apply bg-slate-50;
+  }
+}
+
+/* Light scrollbars, so overflowing panels do not punch a dark hole in the page. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 6px;
+  border: 2px solid #f1f5f9;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* The facilities map pins drop in once, staggered, so a dense 500 m radius
+   reads as a sequence instead of arriving as a wall of markers. */
+@keyframes pin-drop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -140%) scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -100%) scale(1);
+  }
+}
+
+.map-pin {
+  animation: pin-drop 320ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .map-pin {
+    animation: none;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #ffffff;
+  }
+  .card {
+    box-shadow: none;
+    break-inside: avoid;
+  }
+}

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Request
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
+from gemini_act.api.routes import router as api_router
 from gemini_act.chat.auth import require_chat_request
 from gemini_act.chat.events import handle_event, normalize_event
 from gemini_act.config import get_settings
@@ -19,8 +23,66 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Gemini Act", description="An ADK agent that acts from Google Chat")
+app = FastAPI(
+    title="Gemini Act & Evaluator AI",
+    description="ADK agent for Google Chat, plus the Evaluator AI property audit web report",
+)
 app.include_router(oauth_router)
+app.include_router(api_router)
+
+# Resolve static assets for React Web UI
+_POSSIBLE_DIST_DIRS = [
+    (
+        Path(__file__).resolve().parents[3] / "web" / "dist"
+        if len(Path(__file__).resolve().parents) > 3
+        else Path("web/dist")
+    ),
+    Path("/app/web/dist"),
+    Path(os.getcwd()) / "web" / "dist",
+]
+_DIST_DIR = next((d for d in _POSSIBLE_DIST_DIRS if d.is_dir()), None)
+
+if _DIST_DIR and (_DIST_DIR / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=_DIST_DIR / "assets"), name="assets")
+
+
+_PLACEHOLDER_HTML = """
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+    <meta charset="UTF-8">
+    <title>Evaluator AI - Audit tehnic si evaluare imobiliara</title>
+</head>
+<body style="font-family: system-ui, sans-serif; text-align: center; padding: 60px 20px;
+             background: #0f172a; color: #f8fafc;">
+    <h1 style="font-size: 2.2rem; color: #38bdf8;">🏢 Evaluator AI</h1>
+    <p style="font-size: 1.1rem; color: #94a3b8; max-width: 600px; margin: 20px auto;">
+        Platforma de audit imobiliar 360° este activă. Modulul React UI este în curs de încărcare.
+    </p>
+    <div style="margin-top: 30px;">
+        <a href="/api/audit/demo"
+           style="background: #2563eb; color: #fff; padding: 12px 24px; border-radius: 8px;
+                  text-decoration: none; font-weight: 600; margin-right: 12px;">
+            Testează API Demo
+        </a>
+        <a href="/healthz"
+           style="background: #334155; color: #fff; padding: 12px 24px; border-radius: 8px;
+                  text-decoration: none; font-weight: 600;">
+            Status Server (Healthz)
+        </a>
+    </div>
+</body>
+</html>
+"""
+
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/ui", response_class=HTMLResponse)
+async def serve_ui() -> Any:
+    """Serve the React Web UI for property audits."""
+    if _DIST_DIR and (_DIST_DIR / "index.html").is_file():
+        return FileResponse(_DIST_DIR / "index.html")
+    return HTMLResponse(_PLACEHOLDER_HTML)
 
 
 @app.get("/healthz")

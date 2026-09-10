@@ -417,10 +417,12 @@ def genereaza_raport_complet_pdf(
         poveste.append(Spacer(1, 10))
 
     # =========================================================================
-    # 3. AUDIT MOBILIER & FINISAJE INTERIOARE
+    # =========================================================================
+    # 3. AUDIT MOBILIER, FINISAJE & ELECTROCASNICE
     # =========================================================================
     audit_mob = date_proprietate.get("audit_mobilier") or {}
-    if audit_mob:
+    audit_ef = date_proprietate.get("audit_electrocasnice_finisaje") or {}
+    if audit_mob or audit_ef:
         poveste.append(KeepTogether([
             HRFlowable(
                 width="100%",
@@ -429,42 +431,142 @@ def genereaza_raport_complet_pdf(
                 spaceBefore=4,
                 spaceAfter=8,
             ),
-            Paragraph("2. Audit Vizual Interior: Mobilier & Finisaje", stiluri["SectiuneH2"]),
+            Paragraph(
+                "2. Audit Vizual Interior: Finisaje, Defecte & Electrocasnice",
+                stiluri["SectiuneH2"],
+            ),
         ]))
 
-        scor_mob = audit_mob.get("scor_calitate_finisaje", "N/A")
-        val_est = audit_mob.get("valoare_estimata_mobilier_eur", 0)
-        durabilitate = audit_mob.get("durabilitate_estimata_ani", "N/A")
-        sumar_mob = audit_mob.get("sumar_calitate", "Mobilier și finisaje analizate.")
+        if audit_mob:
+            scor_mob = audit_mob.get("scor_calitate_finisaje", "N/A")
+            val_est = audit_mob.get("valoare_estimata_mobilier_eur", 0)
+            durabilitate = audit_mob.get("durabilitate_estimata_ani", "N/A")
+            sumar_mob = audit_mob.get("sumar_calitate", "Mobilier și finisaje analizate.")
 
-        text_mob = (
-            f"<b>Scor Finisaje:</b> {scor_mob}/10 • "
-            f"<b>Valoare Mobilier Inclus:</b> ~{val_est:,.0f} EUR • "
-            f"<b>Durabilitate Estimată:</b> {durabilitate} ani.<br/>"
-            f"<b>Sinteză:</b> {sumar_mob}"
-        )
-        poveste.append(
-            _creeaza_card_apel(
-                text_mob,
-                stiluri,
-                titlu="EVALUARE AMENAJARE",
-                culoare_accent=GOOGLE_BLUE,
+            text_mob = (
+                f"<b>Scor Finisaje:</b> {scor_mob}/10 • "
+                f"<b>Valoare Mobilier Inclus:</b> ~{val_est:,.0f} EUR • "
+                f"<b>Durabilitate Estimată:</b> {durabilitate} ani.<br/>"
+                f"<b>Sinteză Mobilier:</b> {sumar_mob}"
             )
-        )
-        poveste.append(Spacer(1, 8))
+            poveste.append(
+                _creeaza_card_apel(
+                    text_mob,
+                    stiluri,
+                    titlu="EVALUARE MOBILIER",
+                    culoare_accent=GOOGLE_BLUE,
+                )
+            )
+            poveste.append(Spacer(1, 8))
 
-        elemente = audit_mob.get("elemente_identificate", [])
-        if elemente:
-            linii_el = [["Încăpere / Zonă", "Obiecte Identificate", "Material / Tip", "Calitate"]]
-            for el in elemente[:6]:
-                linii_el.append([
-                    el.get("camera", "Cameră"),
-                    el.get("element", "Mobilier"),
-                    el.get("material", "N/A"),
-                    el.get("nivel_calitate", "Medie"),
-                ])
-            poveste.append(_formateaza_tabel(linii_el, stiluri, [107, 150, 130, 100]))
-            poveste.append(Spacer(1, 10))
+            elemente = audit_mob.get("elemente_identificate", [])
+            if elemente:
+                linii_el = [
+                    ["Încăpere / Zonă", "Obiecte Identificate", "Material / Tip", "Calitate"]
+                ]
+                for el in elemente[:6]:
+                    linii_el.append([
+                        el.get("camera", "Cameră"),
+                        el.get("element", "Mobilier"),
+                        el.get("material", "N/A"),
+                        el.get("nivel_calitate", "Medie"),
+                    ])
+                poveste.append(_formateaza_tabel(linii_el, stiluri, [107, 150, 130, 100]))
+                poveste.append(Spacer(1, 8))
+
+        if audit_ef:
+            sumar_ef = audit_ef.get("sumar_financiar") or {}
+            val_nou_el = sumar_ef.get("total_valoare_nou_electrocasnice_eur") or audit_ef.get(
+                "total_valoare_nou_eur", 0
+            )
+            val_act_el = sumar_ef.get("total_valoare_actuala_electrocasnice_eur") or audit_ef.get(
+                "total_valoare_actuala_eur", 0
+            )
+            bug_reparatii = sumar_ef.get("total_buget_remediere_defecte_eur") or audit_ef.get(
+                "buget_total_reparatii_eur", 0
+            )
+            imp_neg = sumar_ef.get("impact_negociere_recomandat_eur") or audit_ef.get(
+                "levier_negociere_recomandat_eur", 0
+            )
+
+            cal_gen = audit_ef.get("calitate_generala_finisaje") or {}
+            scor_fin = cal_gen.get("scor_global") or audit_ef.get("scor_finisaje", "N/A")
+            clasa_fin = str(
+                cal_gen.get("clasa") or audit_ef.get("clasa_finisaje", "N/A")
+            ).capitalize()
+
+            card_ef_text = (
+                f"<b>Calitate Finisaje:</b> {scor_fin}/10 ({clasa_fin}) • "
+                f"<b>Pachet Electrocasnice (Nou/Actual):</b> "
+                f"~{val_nou_el:,.0f} € / ~{val_act_el:,.0f} €.<br/>"
+                f"<b>Buget Necesar Remediere Defecte:</b> ~{bug_reparatii:,.0f} EUR • "
+                f"<b>Levier Negociere Recomandat:</b> -{imp_neg:,.0f} EUR.<br/>"
+                f"<i>{sumar_ef.get('recomandare_evaluator', '')}</i>"
+            )
+            poveste.append(
+                _creeaza_card_apel(
+                    card_ef_text,
+                    stiluri,
+                    titlu="AUDIT ELECTROCASNICE & DEFECTE FINISAJE",
+                    culoare_accent=GOOGLE_AMBER if bug_reparatii > 300 else GOOGLE_GREEN,
+                    culoare_fundal=TINT_AMBER if bug_reparatii > 300 else TINT_GREEN,
+                )
+            )
+            poveste.append(Spacer(1, 8))
+
+            electro = audit_ef.get("electrocasnice") or []
+            if electro:
+                poveste.append(
+                    Paragraph(
+                        "<b>Catalog Electrocasnice & Branduri Identificate</b>",
+                        stiluri["SectiuneH3"],
+                    )
+                )
+                linii_el = [["Aparat", "Cameră", "Brand & Gamă", "Preț Nou", "Valoare Actuală"]]
+                for e in electro[:6]:
+                    brand_info = e.get("brand_detectat", "-")
+                    model_info = e.get("gama_brand") or e.get("model_sau_serie")
+                    if model_info:
+                        brand_info = f"{brand_info} ({model_info})"
+                    p_nou = e.get("pret_estimat_nou_eur") or e.get("pret_nou_estimat_eur", 0)
+                    p_act = e.get("valoare_piata_actuala_eur") or e.get("valoare_actuala_eur", 0)
+                    linii_el.append([
+                        e.get("aparat", "-"),
+                        e.get("camera", "-"),
+                        brand_info,
+                        f"~{p_nou:,.0f} €",
+                        f"~{p_act:,.0f} €",
+                    ])
+                poveste.append(_formateaza_tabel(linii_el, stiluri, [110, 85, 142, 75, 75]))
+                poveste.append(Spacer(1, 8))
+
+            defecte = (
+                audit_ef.get("defecte_si_probleme")
+                or audit_ef.get("defecte_identificate")
+                or []
+            )
+            if defecte:
+                poveste.append(
+                    Paragraph(
+                        "<b>Defecte și Probleme Vizibile (Semnale de Alarmă)</b>",
+                        stiluri["SectiuneH3"],
+                    )
+                )
+                linii_def = [
+                    ["Element Afectat", "Descriere Defect", "Severitate", "Cost Remediere"]
+                ]
+                for d in defecte[:5]:
+                    elem = d.get("element_afectat") or d.get("element", "-")
+                    desc = d.get("descriere_defect") or d.get("defect", "-")
+                    cost = d.get("cost_estimat_remediere_eur") or d.get("cost_estimat_eur", 0)
+                    linii_def.append([
+                        elem,
+                        desc,
+                        d.get("severitate", "Moderat"),
+                        f"~{cost:,.0f} €",
+                    ])
+                poveste.append(_formateaza_tabel(linii_def, stiluri, [115, 192, 90, 90]))
+                poveste.append(Spacer(1, 10))
 
     # =========================================================================
     # 4. AUDIT EXTERIOR STREET VIEW 360° & SATELIT
@@ -502,7 +604,7 @@ def genereaza_raport_complet_pdf(
         if poze_street:
             rand_poze = []
             for p in poze_street[:2]:
-                cale_p = p.get("cale")
+                cale_p = p.get("cale") if isinstance(p, dict) else str(p)
                 if cale_p and os.path.exists(cale_p):
                     try:
                         rand_poze.append(Image(cale_p, width=238, height=140))

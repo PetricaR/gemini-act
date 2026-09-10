@@ -8,6 +8,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 tests/
-*.db
 credentials.json
 client_secret*.json
+web/node_modules/

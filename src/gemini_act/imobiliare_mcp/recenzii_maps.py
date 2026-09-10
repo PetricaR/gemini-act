@@ -360,3 +360,7 @@ def recenzii_to_markdown(data: dict[str, Any]) -> str:
                 linii.append(f"> **{autor}** ({stele}, {timp}):\n> \"{text[:300]}\"\n")
 
     return "\n".join(linii)
+
+
+# Alias de compatibilitate
+obtine_si_analizeaza_recenzii = citeste_si_analizeaza_recenzii_google

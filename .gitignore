@@ -20,8 +20,12 @@ client_secret*.json
 *-service-account*.json
 *.pem
 *.key
+*.pdf
+
 
 # Local state
 *.db
 sessions.db
 .DS_Store
+web/node_modules/
+reports/raport-complet-demo-aviatiei-park.pdf

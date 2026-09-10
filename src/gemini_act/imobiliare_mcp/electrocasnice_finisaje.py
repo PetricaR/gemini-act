@@ -10,6 +10,7 @@ import urllib.parse
 from typing import Any
 
 from gemini_act.config import get_settings
+
 from .viziune import _client, _download, _facts
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,9 @@ _SCHEMA: dict[str, Any] = {
                 "properties": {
                     "element_afectat": {
                         "type": "string",
-                        "description": "ex: Perete living, Tavan baie, Parchet hol, Plintă dormitor",
+                        "description": (
+                            "ex: Perete living, Tavan baie, Parchet hol, Plintă dormitor"
+                        ),
                     },
                     "descriere_defect": {
                         "type": "string",
@@ -119,7 +122,9 @@ _SCHEMA: dict[str, Any] = {
                 "properties": {
                     "aparat": {
                         "type": "string",
-                        "description": "Frigider, Cuptor, Plită, Hotă, Mașină spălat vase/rufe, AC, TV",
+                        "description": (
+                            "Frigider, Cuptor, Plită, Hotă, Mașină spălat vase/rufe, AC, TV"
+                        ),
                     },
                     "camera": {"type": "string", "description": "Bucătărie, Living, Baie, etc."},
                     "brand_detectat": {
@@ -252,6 +257,9 @@ def _completeaza_preturi_si_linkuri(data: dict[str, Any]) -> dict[str, Any]:
         item["link_emag"] = genereaza_link_cautare_emag(termen)
         item["link_altex"] = genereaza_link_cautare_altex(termen)
         item["link_google"] = genereaza_link_cautare_google(termen)
+        item["link_cautare_emag"] = item["link_emag"]
+        item["link_cautare_altex"] = item["link_altex"]
+        item["link_cautare_google"] = item["link_google"]
 
     # Defecte
     defecte = data.get("defecte_si_probleme") or []
@@ -480,7 +488,8 @@ def electrocasnice_finisaje_to_markdown(
     if defecte:
         add("### ⚠️ Defecte și Probleme Vizibile (Semnale de Alarmă)")
         add(
-            "| Element Afectat | Descriere Defect | Severitate | Cauză Probabilă | Cost Estimat Remediere |"
+            "| Element Afectat | Descriere Defect | Severitate | "
+            "Cauză Probabilă | Cost Estimat Remediere |"
         )
         add("| :--- | :--- | :---: | :--- | :---: |")
         for d in defecte:
@@ -502,7 +511,8 @@ def electrocasnice_finisaje_to_markdown(
     else:
         add("### ⚠️ Defecte și Probleme Vizibile")
         add(
-            "> ✅ *Nu au fost identificate defecte structurale sau vicii evidente în fotografiile furnizate.*"
+            "> ✅ *Nu au fost identificate defecte structurale sau vicii evidente "
+            "în fotografiile furnizate.*"
         )
         add("")
 
@@ -581,21 +591,22 @@ def analizeaza_electrocasnice_si_finisaje(
     prompt_text = (
         "Ești un expert evaluator imobiliar tehnic și specialist în finisaje interioare "
         "și electrocasnice pe piața rezidențială din România.\n\n"
-        "Examinezi cu maximă acuratețe fotografiile atașate ale acestei proprietăți pentru a genera "
+        "Examinezi cu atenție fotografiile acestei proprietăți pentru a genera "
         "un audit riguros pe trei axe principale:\n"
         "1. RECUNOAȘTERE ELECTROCASNICE & BRANDURI: Identifică fiecare aparat vizibil "
-        "(plită, cuptor, hotă, frigider, mașină spălat vase, mașină spălat rufe, AC, TV, etc.). "
-        "Distinge brandul (Miele, Bosch, Samsung, Whirlpool, Electrolux, Beko, Franke, Daikin, etc.) "
-        "dacă este vizibil logo-ul sau designul specific. Clasifică gama (Economic/Mid-range/Premium/Ultra-Lux), "
-        "estimează prețul de raft de nou pe piața din România (eMAG/Altex) în EUR și RON, gradul de uzură "
-        "și valoarea reziduală actuală.\n"
-        "2. AUDIT DEFECTE & PROBLEME FINISAJE: Caută proactiv orice vicii sau imperfecțiuni vizibile: "
-        "fisuri în tencuială/pereți/tavane, semne de infiltrații de apă sau igrasie, plăci ceramice ciobite, "
-        "parchet umflat sau distanțat, plinte lipsă sau dezlipite, condens între foile de geam, "
-        "rugină sau silicon mucegăit la baie, cabluri aparente. Notează gravitatea (Minor/Moderat/Critic), "
-        "cauza și costul estimat de remediere (materiale + manoperă).\n"
-        "3. CALITATE FINISAJE & IMPACT FINANCIAR: Acordă note pe categorii de finisaje și calculează "
-        "totalul valoric al dotărilor și bugetul necesar de reparații pentru negocierea prețului.\n\n"
+        "(plită, cuptor, hotă, frigider, mașină spălat, AC, TV, etc.). "
+        "Distinge brandul (Miele, Bosch, Samsung, Whirlpool, Electrolux, Beko, etc.) "
+        "dacă este vizibil logo-ul sau designul specific. "
+        "Clasifică gama (Economic/Mid-range/Premium/Ultra-Lux), "
+        "estimează prețul de nou pe piața din România (EUR și RON), "
+        "gradul de uzură și valoarea reziduală actuală.\n"
+        "2. AUDIT DEFECTE & PROBLEME FINISAJE: Caută proactiv orice vicii sau imperfecțiuni: "
+        "fisuri în tencuială/pereți/tavane, semne de infiltrații de apă sau igrasie, "
+        "plăci ceramice ciobite, parchet umflat sau distanțat, plinte lipsă sau dezlipite, "
+        "condens între foile de geam, rugină sau silicon mucegăit la baie, cabluri aparente. "
+        "Notează gravitatea (Minor/Moderat/Critic), cauza și costul estimat de remediere.\n"
+        "3. CALITATE FINISAJE & IMPACT FINANCIAR: Acordă note pe categorii de finisaje și "
+        "calculează totalul valoric al dotărilor și bugetul necesar de reparații.\n\n"
         f"Date tehnice cunoscute:\n{facts}\n"
     )
 
@@ -619,7 +630,14 @@ def analizeaza_electrocasnice_si_finisaje(
                 thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
             ),
         )
-        text = getattr(response, "text", "") or ""
+        text = (getattr(response, "text", "") or "").strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
         parsed = json.loads(text) if text else {}
         date_finale = _completeaza_preturi_si_linkuri(parsed)
     except Exception as exc:
