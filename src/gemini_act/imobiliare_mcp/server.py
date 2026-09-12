@@ -39,7 +39,9 @@ logger = logging.getLogger(__name__)
 mcp = MCPServer("imobiliare")
 
 SellerType = Literal["agency", "individual", "developer"]
-SortBy = Literal["metro", "price", "price_desc", "price_per_sqm", "surface", "newest", "year_built", "relevance"]
+SortBy = Literal[
+    "metro", "price", "price_desc", "price_per_sqm", "surface", "newest", "year_built", "relevance"
+]
 
 
 class Filters(BaseModel):
@@ -53,7 +55,9 @@ class Filters(BaseModel):
     pret_max: int | None = Field(None, description="Maximum price in EUR")
     pret_min: int | None = Field(None, description="Minimum price in EUR")
     pret_mp_max: int | None = Field(None, description="Maximum price per usable sqm, in EUR")
-    pret_redus: bool | None = Field(None, description="Only listings whose price was recently reduced")
+    pret_redus: bool | None = Field(
+        None, description="Only listings whose price was recently reduced"
+    )
 
     # size and layout
     camere: int | None = Field(None, description="Exact number of rooms")
@@ -69,19 +73,32 @@ class Filters(BaseModel):
     an_max: int | None = Field(None, description="Built no later than this year")
 
     # location
-    metrou_max_m: float | None = Field(None, description="Max walking distance to a metro station, in metres. The AI cannot resolve 'near the metro' itself, so use this.")
-    zona: str | None = Field(None, description="Neighbourhood substring, e.g. 'Drumul Taberei', 'Dristor'")
+    metrou_max_m: float | None = Field(
+        None,
+        description="Max walking distance to a metro station, in metres. The AI cannot resolve 'near the metro' itself, so use this.",
+    )
+    zona: str | None = Field(
+        None, description="Neighbourhood substring, e.g. 'Drumul Taberei', 'Dristor'"
+    )
     oras: str | None = Field(None, description="City or sector substring, e.g. 'Sector 3'")
-    doar_locatie_exacta: bool = Field(False, description="Only listings with an exact (not approximate) map location")
+    doar_locatie_exacta: bool = Field(
+        False, description="Only listings with an exact (not approximate) map location"
+    )
 
     # seller and offer
-    tip_vanzator: SellerType | None = Field(None, description="'individual' = direct from owner, 'agency', 'developer'")
+    tip_vanzator: SellerType | None = Field(
+        None, description="'individual' = direct from owner, 'agency', 'developer'"
+    )
     comision_zero: bool | None = Field(None, description="Only listings with zero buyer commission")
     exclusivitate: bool | None = Field(None, description="Only exclusive listings")
-    constructie_noua: bool | None = Field(None, description="Only new builds (True) or only established (False)")
+    constructie_noua: bool | None = Field(
+        None, description="Only new builds (True) or only established (False)"
+    )
 
     # freshness and media
-    zile_pe_piata_max: int | None = Field(None, description="Max days the listing has been on the market")
+    zile_pe_piata_max: int | None = Field(
+        None, description="Max days the listing has been on the market"
+    )
     cu_video: bool | None = Field(None, description="Only listings with video")
     cu_tur_virtual: bool | None = Field(None, description="Only listings with a virtual tour")
     cu_plan: bool | None = Field(None, description="Only listings with a floor plan")
@@ -145,24 +162,67 @@ def _apply(records, filters, sort, limit):
 
 
 @mcp.tool()
-def cauta(
-    query: Annotated[str, Field(description="Natural-language query, Romanian or English, e.g. 'apartament 3 camere Bucuresti'. Describe intent here; put numeric limits in `filtre`.")],
+def cauta_obscura(
+    query: Annotated[
+        str,
+        Field(
+            description="Natural-language query, Romanian or English, e.g. 'apartament 2 camere Titan sub 90000 euro'. Describe intent here; put numeric limits in `filtre`."
+        ),
+    ],
     filtre: Filters | None = None,
     sort: Annotated[SortBy, Field(description="Ordering of the results")] = "metro",
     limit: Annotated[int, Field(description="Maximum listings to return", ge=1, le=200)] = 20,
-    pool: Annotated[int, Field(description="How many AI-ranked results to pull before filtering. Raise it when strict filters leave too few matches.", ge=60, le=600)] = 240,
+) -> dict[str, Any]:
+    """Search imobiliare.ro autonomously using Obscura headless browser and sitemap hydration.
+
+    Does NOT require an expired browser session or session_id token.
+    """
+    from .obscura import search_imobiliare_obscura
+
+    return search_imobiliare_obscura(query=query, filters=filtre, sort=sort, limit=limit)
+
+
+@mcp.tool()
+def cauta(
+    query: Annotated[
+        str,
+        Field(
+            description="Natural-language query, Romanian or English, e.g. 'apartament 3 camere Bucuresti'. Describe intent here; put numeric limits in `filtre`."
+        ),
+    ],
+    filtre: Filters | None = None,
+    sort: Annotated[SortBy, Field(description="Ordering of the results")] = "metro",
+    limit: Annotated[int, Field(description="Maximum listings to return", ge=1, le=200)] = 20,
+    pool: Annotated[
+        int,
+        Field(
+            description="How many AI-ranked results to pull before filtering. Raise it when strict filters leave too few matches.",
+            ge=60,
+            le=600,
+        ),
+    ] = 240,
 ) -> dict[str, Any]:
     """Search imobiliare.ro by description and return matching properties.
 
-    Returns a `resume_token` -- pass it to `reia` to re-filter the same result
-    set later without spending a session.
+    Returns a `resume_token` when AI search succeeds, and falls back to
+    autonomous Obscura search if the browser session is expired or missing.
     """
     filters = filtre or Filters()
     with _client() as client:
         try:
             result = client.search(query, max_results=pool)
         except SessionError as e:
-            return {"error": str(e), "hint": "See README: capturing a session_id."}
+            # Fall back to autonomous Obscura search when browser session is expired/missing
+            from .obscura import search_imobiliare_obscura
+
+            logger.info("SessionError in cauta (%s). Falling back to Obscura search.", e)
+            fallback = search_imobiliare_obscura(
+                query=query, filters=filters, sort=sort, limit=limit
+            )
+            fallback["session_warning"] = (
+                f"Sesiunea AI search a expirat ({e}). Rezultatele au fost obținute autonom via Obscura."
+            )
+            return fallback
 
     records = [
         normalise(listing, result.explanations.get(str(listing.get("id"))))
@@ -187,7 +247,9 @@ def reia(
     filtre: Filters | None = None,
     sort: Annotated[SortBy, Field(description="Ordering of the results")] = "metro",
     limit: Annotated[int, Field(description="Maximum listings to return", ge=1, le=200)] = 20,
-    pool: Annotated[int, Field(description="How many results to pull before filtering", ge=60, le=600)] = 240,
+    pool: Annotated[
+        int, Field(description="How many results to pull before filtering", ge=60, le=600)
+    ] = 240,
 ) -> dict[str, Any]:
     """Re-read an earlier search's results and re-filter them.
 
@@ -212,7 +274,12 @@ def reia(
 
 @mcp.tool()
 def detalii(
-    ids: Annotated[list[str], Field(description="Listing ids, e.g. ['275966742']. The trailing number of an imobiliare.ro offer URL is the id.")],
+    ids: Annotated[
+        list[str],
+        Field(
+            description="Listing ids, e.g. ['275966742']. The trailing number of an imobiliare.ro offer URL is the id."
+        ),
+    ],
 ) -> dict[str, Any]:
     """Fetch full details for specific listing ids. Needs no session."""
     with _client() as client:
@@ -238,7 +305,9 @@ def statistici(
     with _client() as client:
         result = client.resume(token, max_results=pool)
     records = filter_and_rank(
-        [normalise(listing) for listing in result.listings], sort_by="relevance", **filters.as_kwargs()
+        [normalise(listing) for listing in result.listings],
+        sort_by="relevance",
+        **filters.as_kwargs(),
     )
     if not records:
         return {"matched": 0, "note": "No listings matched; loosen the filters."}
@@ -248,7 +317,8 @@ def statistici(
         if not vals:
             return None
         return {
-            "min": vals[0], "max": vals[-1],
+            "min": vals[0],
+            "max": vals[-1],
             "median": statistics.median(vals),
             "mean": round(statistics.fmean(vals), 1),
             "n": len(vals),
@@ -296,20 +366,49 @@ class ParametriEvaluare(BaseModel):
     """Valuation inputs. Every one is argued in the report (GEV 630 §71), and
     every one can be overridden -- these are market conventions, not laws."""
 
-    marja_negociere_baza: float = Field(3.0, description="Base discount from asking to transaction price, %", ge=0, le=25)
-    marja_negociere_per_30_zile: float = Field(0.5, description="Extra negotiation margin per 30 days of exposure, %", ge=0, le=5)
-    marja_negociere_plafon: float = Field(12.0, description="Cap on the negotiation margin, %", ge=0, le=30)
-    valoare_parcare: float = Field(12000.0, description="Market value of a parking space, EUR", ge=0)
+    marja_negociere_baza: float = Field(
+        3.0, description="Base discount from asking to transaction price, %", ge=0, le=25
+    )
+    marja_negociere_per_30_zile: float = Field(
+        0.5, description="Extra negotiation margin per 30 days of exposure, %", ge=0, le=5
+    )
+    marja_negociere_plafon: float = Field(
+        12.0, description="Cap on the negotiation margin, %", ge=0, le=30
+    )
+    valoare_parcare: float = Field(
+        12000.0, description="Market value of a parking space, EUR", ge=0
+    )
     valoare_mobilier: float = Field(8000.0, description="Market value of furnishing, EUR", ge=0)
-    grad_neocupare: float = Field(8.0, description="Vacancy and collection loss, % of potential gross income (GEV 630 §69)", ge=0, le=50)
-    cheltuieli_operare: float = Field(18.0, description="Owner's non-recoverable expenses, % of effective gross income (GEV 630 §70)", ge=0, le=60)
+    grad_neocupare: float = Field(
+        8.0,
+        description="Vacancy and collection loss, % of potential gross income (GEV 630 §69)",
+        ge=0,
+        le=50,
+    )
+    cheltuieli_operare: float = Field(
+        18.0,
+        description="Owner's non-recoverable expenses, % of effective gross income (GEV 630 §70)",
+        ge=0,
+        le=60,
+    )
     rata_capitalizare: float = Field(6.0, description="Capitalisation rate, %", gt=0, le=20)
-    spor_an_pe_an: float = Field(0.45, description="Value premium per year of newness, %", ge=0, le=3)
+    spor_an_pe_an: float = Field(
+        0.45, description="Value premium per year of newness, %", ge=0, le=3
+    )
     plafon_spor_an: float = Field(20.0, description="Cap on the age adjustment, %", ge=0, le=60)
-    discount_metrou_max: float = Field(8.0, description="Discount at 1500 m from a metro station, %", ge=0, le=30)
+    discount_metrou_max: float = Field(
+        8.0, description="Discount at 1500 m from a metro station, %", ge=0, le=30
+    )
     spor_bloc_nou: float = Field(4.0, description="New-build premium, %", ge=0, le=30)
-    prag_descalificare: float = Field(35.0, description="Gross adjustment above which a comparable is disqualified, % (GEV 630 §57)", ge=10, le=100)
-    pondere_piata: float = Field(80.0, description="Weight of the sales-comparison approach, %", ge=0, le=100)
+    prag_descalificare: float = Field(
+        35.0,
+        description="Gross adjustment above which a comparable is disqualified, % (GEV 630 §57)",
+        ge=10,
+        le=100,
+    )
+    pondere_piata: float = Field(
+        80.0, description="Weight of the sales-comparison approach, %", ge=0, le=100
+    )
     pondere_venit: float = Field(20.0, description="Weight of the income approach, %", ge=0, le=100)
 
     def to_params(self) -> Params:
@@ -374,14 +473,15 @@ def _scor_general(date: dict[str, Any]) -> tuple[float | None, str, list[str]]:
     for every property regardless of any finding, including ones where every
     section was unavailable.
     """
-    componente: list[tuple[float, float]] = []   # (score, weight)
+    componente: list[tuple[float, float]] = []  # (score, weight)
     baza: list[str] = []
 
     def disponibil(sectiune: Any) -> dict[str, Any] | None:
         if not isinstance(sectiune, dict):
             return None
         if sectiune.get("disponibil") is False or sectiune.get("status") in {
-            "indisponibil", "error"
+            "indisponibil",
+            "error",
         }:
             return None
         return sectiune
@@ -400,7 +500,11 @@ def _scor_general(date: dict[str, Any]) -> tuple[float | None, str, list[str]]:
             baza.append("audit finisaje")
 
     if tgt := disponibil(date.get("audit_targetare")):
-        analiza = tgt.get("analiza_financiara") or tgt.get("date_firma", {}).get("analiza_financiara") or {}
+        analiza = (
+            tgt.get("analiza_financiara")
+            or tgt.get("date_firma", {}).get("analiza_financiara")
+            or {}
+        )
         if (scor := analiza.get("scor_sanatate_financiara")) is not None:
             componente.append((float(scor), 1.5))
             baza.append("bonitate dezvoltator")
@@ -428,9 +532,12 @@ def _scor_general(date: dict[str, Any]) -> tuple[float | None, str, list[str]]:
     return scor, calificativ, baza
 
 
-def _evaluare_indisponibila(motiv: str, subject: dict[str, Any] | None = None,
-                            comparabile: list[Any] | None = None,
-                            **extra: Any) -> dict[str, Any]:
+def _evaluare_indisponibila(
+    motiv: str,
+    subject: dict[str, Any] | None = None,
+    comparabile: list[Any] | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
     """A valuation that could not be produced, and why.
 
     Each caller passes its own `motiv`: "listing not found", "zone not
@@ -483,8 +590,11 @@ def _comparabila_dict(c: Any) -> dict[str, Any]:
         # None, not a stand-in distance: an unpublished metro distance is not
         # evidence that the flat is 500 m from a station.
         "distanta_km": round(metro_m / 1000, 2) if metro_m is not None else None,
-        "ponderi_ajustare": (f"{round(net_pct, 1):+}% ajustare netă"
-                             if net_pct is not None else "fără ajustări aplicate"),
+        "ponderi_ajustare": (
+            f"{round(net_pct, 1):+}% ajustare netă"
+            if net_pct is not None
+            else "fără ajustări aplicate"
+        ),
         "ajustare_neta_procent": round(net_pct, 1) if net_pct is not None else None,
         # Gross, not net: §57's "total" is the sum of absolute adjustments, and
         # the two differ whenever corrections have opposite signs.
@@ -499,15 +609,44 @@ def _reports_dir() -> Path:
 
 @mcp.tool()
 def evaluare(
-    identificator: Annotated[str, Field(description="Listing id or full imobiliare.ro offer URL, e.g. '275807510'")],
-    comparabile: Annotated[int, Field(description="How many comparables to carry into the grid", ge=3, le=30)] = 12,
+    identificator: Annotated[
+        str, Field(description="Listing id or full imobiliare.ro offer URL, e.g. '275807510'")
+    ],
+    comparabile: Annotated[
+        int, Field(description="How many comparables to carry into the grid", ge=3, le=30)
+    ] = 12,
     parametri: ParametriEvaluare | None = None,
-    fisier: Annotated[str | None, Field(description="Where to write the markdown report. Defaults to $IMOBILIARE_REPORTS_DIR/evaluare-<id>.md")] = None,
-    cu_localizare: Annotated[bool, Field(description="Geocode the address and list nearby schools, shops, parks and transport")] = True,
-    raza_facilitati: Annotated[int, Field(description="Radius for the amenity search, metres", ge=300, le=3000)] = 1200,
-    cu_galerie: Annotated[bool, Field(description="Download the listing photos into one contact sheet next to the report")] = True,
-    observatii_vizuale: Annotated[str | None, Field(description="Your own findings from looking at the photos, in markdown, filed alongside the automated analysis rather than replacing it. Usually unnecessary — leave it empty and let `cu_viziune` do the looking.")] = None,
-    cu_viziune: Annotated[bool, Field(description="Have a vision model look at the listing photos, the Street View image of the block and the area map, and file what it sees in the report. This is what makes the report's visual section real rather than empty.")] = True,
+    fisier: Annotated[
+        str | None,
+        Field(
+            description="Where to write the markdown report. Defaults to $IMOBILIARE_REPORTS_DIR/evaluare-<id>.md"
+        ),
+    ] = None,
+    cu_localizare: Annotated[
+        bool,
+        Field(
+            description="Geocode the address and list nearby schools, shops, parks and transport"
+        ),
+    ] = True,
+    raza_facilitati: Annotated[
+        int, Field(description="Radius for the amenity search, metres", ge=300, le=3000)
+    ] = 1200,
+    cu_galerie: Annotated[
+        bool,
+        Field(description="Download the listing photos into one contact sheet next to the report"),
+    ] = True,
+    observatii_vizuale: Annotated[
+        str | None,
+        Field(
+            description="Your own findings from looking at the photos, in markdown, filed alongside the automated analysis rather than replacing it. Usually unnecessary — leave it empty and let `cu_viziune` do the looking."
+        ),
+    ] = None,
+    cu_viziune: Annotated[
+        bool,
+        Field(
+            description="Have a vision model look at the listing photos, the Street View image of the block and the area map, and file what it sees in the report. This is what makes the report's visual section real rather than empty."
+        ),
+    ] = True,
 ) -> dict[str, Any]:
     """Value one apartment under the Romanian valuation standards (SEV 2025).
 
@@ -550,8 +689,14 @@ def evaluare(
                 subject=subject,
             )
 
-        sale_records = [normalise(listing) for listing in client.hydrate([o.id for o in sale_pool[:120]])]
-        rent_records = [normalise(listing) for listing in client.hydrate([o.id for o in rent_pool[:60]])] if rent_pool else []
+        sale_records = [
+            normalise(listing) for listing in client.hydrate([o.id for o in sale_pool[:120]])
+        ]
+        rent_records = (
+            [normalise(listing) for listing in client.hydrate([o.id for o in rent_pool[:60]])]
+            if rent_pool
+            else []
+        )
 
     usable = [r for r in sale_records if r.get("price_eur") and r.get("surface_sqm")]
     chosen = comps.rank_by_similarity(subject, usable)[:comparabile]
@@ -564,8 +709,9 @@ def evaluare(
         )
 
     subject_furnished = is_furnished(subject, slug_hint="-mobilat-" in (subject.get("url") or ""))
-    valuation = evaluate(subject, chosen, rent_records, p,
-                         subject_furnished=subject_furnished, rate_pool=usable)
+    valuation = evaluate(
+        subject, chosen, rent_records, p, subject_furnished=subject_furnished, rate_pool=usable
+    )
     if not valuation.sufficient_comps or not valuation.comps or len(valuation.comps) < 3:
         return _evaluare_indisponibila(
             f"Sub 3 comparabile calificate după ajustări: {len(valuation.comps)} reținute, "
@@ -580,8 +726,9 @@ def evaluare(
 
     place = vecinatati = None
     if cu_localizare:
-        place = locatie.geocode(subject.get("address_text") or subject.get("location"),
-                                subject.get("location"))
+        place = locatie.geocode(
+            subject.get("address_text") or subject.get("location"), subject.get("location")
+        )
         if place:
             vecinatati = locatie.nearby(place, raza_facilitati)
 
@@ -608,6 +755,7 @@ def evaluare(
     if place is not None and maps.available():
         try:
             from gemini_act.agent.tools.maps import calculeaza_scor_accesibilitate
+
             res = calculeaza_scor_accesibilitate(f"{place.lat},{place.lon}")
             if res.get("status") == "success":
                 scor_acces = res.get("scor_accesibilitate")
@@ -630,9 +778,13 @@ def evaluare(
     markdown = render(
         valuation,
         comps_source=f"sitemap imobiliare.ro, aria '{area}', {len(usable)} oferte active cu preț și suprafață",
-        rents_source=(f"sitemap închirieri, aria '{area}', {valuation.income.sample} oferte"
-                      if valuation.income.sample else "insuficiente oferte de închiriere"),
-        place=place, vecinatati=vecinatati,
+        rents_source=(
+            f"sitemap închirieri, aria '{area}', {valuation.income.sample} oferte"
+            if valuation.income.sample
+            else "insuficiente oferte de închiriere"
+        ),
+        place=place,
+        vecinatati=vecinatati,
         sheet=sheet_file,
         observatii_vizuale=observatii_vizuale,
         viziune=findings,
@@ -651,13 +803,20 @@ def evaluare(
         "pret_cerut_eur": ask,
         "valoare_estimata_eur": round(final) if final else None,
         "diferenta_pct": round((ask - final) / final * 100, 1) if (ask and final) else None,
-        "valoare_unitara_estimata_eur_mp": round(valuation.market_per_sqm) if valuation.market_per_sqm else None,
+        "valoare_unitara_estimata_eur_mp": round(valuation.market_per_sqm)
+        if valuation.market_per_sqm
+        else None,
         "pret_unitar_cerut_eur_mp": subject.get("price_per_sqm"),
-        "interval_valori_eur_mp": ([round(valuation.value_range[0]), round(valuation.value_range[1])]
-                                   if valuation.value_range else None),
+        "interval_valori_eur_mp": (
+            [round(valuation.value_range[0]), round(valuation.value_range[1])]
+            if valuation.value_range
+            else None
+        ),
         "abordare_piata_eur": round(valuation.market_value) if valuation.market_value else None,
         "abordare_venit_eur": round(valuation.income.value) if valuation.income.value else None,
-        "randament_net_implicit_pct": round(valuation.implied_yield, 2) if valuation.implied_yield else None,
+        "randament_net_implicit_pct": round(valuation.implied_yield, 2)
+        if valuation.implied_yield
+        else None,
         "elasticitate_suprafata": round(valuation.rates.size_elasticity.value, 3),
         "elasticitate_derivata_din_date": valuation.rates.size_elasticity.derived,
         "galerie": str(sheet) if sheet else None,
@@ -679,8 +838,15 @@ def evaluare(
         "coordonate": [place.lat, place.lon] if place else None,
         "precizie_locatie": place.precision if place else None,
         "harta": place.map_url if place else None,
-        "facilitati": ({k: [{"nume": i.name, "m": i.distance_m} for i in v[:5]]
-                        for k, v in vecinatati.pois.items() if v} if vecinatati else None),
+        "facilitati": (
+            {
+                k: [{"nume": i.name, "m": i.distance_m} for i in v[:5]]
+                for k, v in vecinatati.pois.items()
+                if v
+            }
+            if vecinatati
+            else None
+        ),
         "fiabilitate": valuation.reliability,
         "extrapolare_suprafata": valuation.extrapolated,
         "comparabile_retinute": len(valuation.comps),
@@ -712,6 +878,7 @@ def inspecteaza_poze(
         subject = normalise(raw[0])
 
     from . import viziune
+
     return viziune.inspect(subject, intrebare)
 
 
@@ -787,9 +954,7 @@ def analizeaza_materiale_si_specificatii_tehnice(
     identificator_sau_nume: Annotated[
         str,
         Field(
-            description=(
-                "Listing ID, imobiliare.ro URL, or residential complex name / description"
-            )
+            description=("Listing ID, imobiliare.ro URL, or residential complex name / description")
         ),
     ],
     include_fotografii: Annotated[
@@ -1105,22 +1270,22 @@ def genereaza_raport_complet_pdf(
                 fl_num = sub.get("floor")
                 fl_tot = sub.get("floors_total")
                 date_proprietate["etaj"] = (
-                    f"Etaj {fl_num} din {fl_tot}" if (fl_num is not None and fl_tot)
-                    else f"Etaj {fl_num}" if fl_num is not None
+                    f"Etaj {fl_num} din {fl_tot}"
+                    if (fl_num is not None and fl_tot)
+                    else f"Etaj {fl_num}"
+                    if fl_num is not None
                     else None
                 )
                 date_proprietate["an_constructie"] = sub.get("year_built")
-                date_proprietate["url"] = sub.get("url") or r_item.get("url") or adresa_sau_identificator
+                date_proprietate["url"] = (
+                    sub.get("url") or r_item.get("url") or adresa_sau_identificator
+                )
 
                 # The city comes from the listing or not at all -- appending
                 # ", București" unconditionally relabelled every Cluj, Brașov
                 # and Timișoara property as being in Bucharest, and that
                 # address then drove geocoding, Street View and the reviews.
-                loc_txt = (
-                    sub.get("address_text")
-                    or r_item.get("address")
-                    or sub.get("location")
-                )
+                loc_txt = sub.get("address_text") or r_item.get("address") or sub.get("location")
                 oras = sub.get("city") or sub.get("county")
                 if loc_txt and oras and oras.lower() not in loc_txt.lower():
                     loc_txt = f"{loc_txt}, {oras}"
@@ -1141,11 +1306,21 @@ def genereaza_raport_complet_pdf(
                 # Evaluare ANEVAR sumară
                 if "evaluare_anevar" not in date_proprietate:
                     try:
-                        eval_res = evaluare(lid, cu_viziune=False, cu_galerie=False, cu_localizare=False)
-                        if eval_res and eval_res.get("disponibil") is not False and eval_res.get("valoare_estimata_eur"):
-                            val_est = eval_res.get("valoare_estimata_eur") or eval_res.get("abordare_piata_eur")
+                        eval_res = evaluare(
+                            lid, cu_viziune=False, cu_galerie=False, cu_localizare=False
+                        )
+                        if (
+                            eval_res
+                            and eval_res.get("disponibil") is not False
+                            and eval_res.get("valoare_estimata_eur")
+                        ):
+                            val_est = eval_res.get("valoare_estimata_eur") or eval_res.get(
+                                "abordare_piata_eur"
+                            )
                             sqm = date_proprietate.get("suprafata_utila")
-                            pret_cerut = date_proprietate.get("pret_total") or eval_res.get("pret_cerut_eur")
+                            pret_cerut = date_proprietate.get("pret_total") or eval_res.get(
+                                "pret_cerut_eur"
+                            )
                             dif_pct = eval_res.get("diferenta_pct")
                             if dif_pct is None and pret_cerut and val_est:
                                 dif_pct = round((pret_cerut - val_est) / val_est * 100, 1)
@@ -1157,9 +1332,17 @@ def genereaza_raport_complet_pdf(
                             range_val = eval_res.get("interval_valori_eur_mp")
                             v_min = round(range_val[0] * sqm) if (range_val and sqm) else None
                             v_max = round(range_val[1] * sqm) if (range_val and sqm) else None
-                            pret_mp_est = eval_res.get("valoare_unitara_estimata_eur_mp") or (round(val_est / sqm) if (val_est and sqm) else None)
-                            pret_mp_cerut = eval_res.get("pret_unitar_cerut_eur_mp") or (round(pret_cerut / sqm) if (pret_cerut and sqm) else None)
-                            marja = (pret_cerut - val_est) if (pret_cerut and val_est and pret_cerut > val_est) else 0
+                            pret_mp_est = eval_res.get("valoare_unitara_estimata_eur_mp") or (
+                                round(val_est / sqm) if (val_est and sqm) else None
+                            )
+                            pret_mp_cerut = eval_res.get("pret_unitar_cerut_eur_mp") or (
+                                round(pret_cerut / sqm) if (pret_cerut and sqm) else None
+                            )
+                            marja = (
+                                (pret_cerut - val_est)
+                                if (pret_cerut and val_est and pret_cerut > val_est)
+                                else 0
+                            )
 
                             comps_data = eval_res.get("comparabile") or []
                             if len(comps_data) >= 3:
@@ -1193,7 +1376,8 @@ def genereaza_raport_complet_pdf(
                             date_proprietate["evaluare_anevar"] = {
                                 "status": "indisponibil",
                                 "disponibil": False,
-                                "motiv": (eval_res or {}).get("motiv") or "Eșantion insuficient: sub 3 comparabile reale identificate conform standardului ANEVAR GEV 630.",
+                                "motiv": (eval_res or {}).get("motiv")
+                                or "Eșantion insuficient: sub 3 comparabile reale identificate conform standardului ANEVAR GEV 630.",
                                 "provenienta": "indisponibil",
                                 "comparabile_utilizate": (eval_res or {}).get("comparabile") or [],
                             }
@@ -1207,14 +1391,28 @@ def genereaza_raport_complet_pdf(
                         }
 
                 # Audit interior mobilier & electrocasnice
-                if "audit_electrocasnice_finisaje" not in date_proprietate and "audit_electrocasnice" not in date_proprietate:
+                if (
+                    "audit_electrocasnice_finisaje" not in date_proprietate
+                    and "audit_electrocasnice" not in date_proprietate
+                ):
                     try:
                         from . import electrocasnice_finisaje
-                        ef_res = electrocasnice_finisaje.analizeaza_electrocasnice_si_finisaje(sub, limit=15)
-                        if ef_res and ef_res.get("status") == "success" and ef_res.get("disponibil") is not False:
+
+                        ef_res = electrocasnice_finisaje.analizeaza_electrocasnice_si_finisaje(
+                            sub, limit=15
+                        )
+                        if (
+                            ef_res
+                            and ef_res.get("status") == "success"
+                            and ef_res.get("disponibil") is not False
+                        ):
                             ef_data = ef_res.get("date_analiza", {})
-                            ef_data["mod_analiza"] = ef_res.get("mod_analiza", ef_data.get("mod_analiza", "necunoscut"))
-                            ef_data["provenienta"] = ef_res.get("provenienta", ef_data.get("provenienta", "model"))
+                            ef_data["mod_analiza"] = ef_res.get(
+                                "mod_analiza", ef_data.get("mod_analiza", "necunoscut")
+                            )
+                            ef_data["provenienta"] = ef_res.get(
+                                "provenienta", ef_data.get("provenienta", "model")
+                            )
                             date_proprietate["audit_electrocasnice_finisaje"] = ef_data
                             date_proprietate["audit_electrocasnice"] = ef_data
                     except Exception as err:
@@ -1229,7 +1427,9 @@ def genereaza_raport_complet_pdf(
     date_proprietate.setdefault("moneda", "EUR")
 
     # Fallback finisaje & electrocasnice când lipsesc datele
-    if not date_proprietate.get("audit_electrocasnice") and not date_proprietate.get("audit_electrocasnice_finisaje"):
+    if not date_proprietate.get("audit_electrocasnice") and not date_proprietate.get(
+        "audit_electrocasnice_finisaje"
+    ):
         ef_indisponibil = {
             "status": "indisponibil",
             "disponibil": False,
@@ -1252,7 +1452,9 @@ def genereaza_raport_complet_pdf(
                 if date_proprietate.get("id") != "imobil"
                 else (date_proprietate.get("adresa") or adresa_sau_identificator)
             )
-            ext_res = analizeaza_strada_si_imprejurimi_street_view(target_strada, include_satelit=True)
+            ext_res = analizeaza_strada_si_imprejurimi_street_view(
+                target_strada, include_satelit=True
+            )
             # The street-view tool returns its analysis under "audit".
             # Reading a key it never sets yielded {} on every run, which the
             # lines below then stamped as available and model-sourced.
@@ -1285,6 +1487,7 @@ def genereaza_raport_complet_pdf(
     # Dezvoltator & Constructor
     if "specificatii_dezvoltator" not in date_proprietate:
         from . import dezvoltator
+
         dev_res = dezvoltator.extract_developer_and_constructor_info(
             descriere=(sub or {}).get("description") or "",
             titlu=(sub or {}).get("title") or date_proprietate.get("titlu") or "",
@@ -1293,16 +1496,14 @@ def genereaza_raport_complet_pdf(
         )
         date_proprietate["specificatii_dezvoltator"] = dev_res.get("analiza_dezvoltator", {})
 
-    dev_name = (
-        date_proprietate.get("specificatii_dezvoltator", {}).get("dezvoltator")
-        or date_proprietate.get("dezvoltator")
-    )
+    dev_name = date_proprietate.get("specificatii_dezvoltator", {}).get(
+        "dezvoltator"
+    ) or date_proprietate.get("dezvoltator")
     if dev_name:
         date_proprietate["dezvoltator"] = dev_name
-    constructor_name = (
-        date_proprietate.get("specificatii_dezvoltator", {}).get("constructor")
-        or date_proprietate.get("constructor")
-    )
+    constructor_name = date_proprietate.get("specificatii_dezvoltator", {}).get(
+        "constructor"
+    ) or date_proprietate.get("constructor")
     if constructor_name:
         date_proprietate["constructor"] = constructor_name
 
@@ -1319,7 +1520,9 @@ def genereaza_raport_complet_pdf(
             except Exception as e:
                 logger.debug("Targetare error: %s", e)
 
-    if not date_proprietate.get("audit_targetare") and not date_proprietate.get("targetare_financiar"):
+    if not date_proprietate.get("audit_targetare") and not date_proprietate.get(
+        "targetare_financiar"
+    ):
         t_unavailable = {
             "status": "indisponibil",
             "disponibil": False,
@@ -1331,7 +1534,15 @@ def genereaza_raport_complet_pdf(
 
     # Recenzii Google Maps
     if "recenzii_google" not in date_proprietate:
-        query_parts = [p for p in [dev_name, date_proprietate.get("complex_name"), date_proprietate.get("adresa")] if p]
+        query_parts = [
+            p
+            for p in [
+                dev_name,
+                date_proprietate.get("complex_name"),
+                date_proprietate.get("adresa"),
+            ]
+            if p
+        ]
         if query_parts:
             try:
                 search_query = " ".join(query_parts)
@@ -1352,10 +1563,27 @@ def genereaza_raport_complet_pdf(
         }
         date_proprietate["recenzii_google"] = rec_unavailable
 
+    # Locație & Facilități 500m
+    if "locatie" not in date_proprietate:
+        try:
+            from gemini_act.api import imagery
+
+            date_proprietate["locatie"] = imagery.build_location_block(
+                date_proprietate.get("adresa") or "",
+                fallback=date_proprietate.get("complex_name"),
+                radius_m=500,
+                lat=date_proprietate.get("lat"),
+                lon=date_proprietate.get("lon"),
+            )
+        except Exception as e:
+            logger.debug("Eroare generare locatie in server: %s", e)
+
     # Checklist Recepție Tehnică. Generic by design: these are checks that
     # apply to any purchase. Naming a specific joinery brand or boiler type
     # here asserted equipment nobody had looked at.
-    if not date_proprietate.get("checklist_receptie") and not date_proprietate.get("receptie_checklist"):
+    if not date_proprietate.get("checklist_receptie") and not date_proprietate.get(
+        "receptie_checklist"
+    ):
         chk_items = [
             "Verificare Carte Tehnică a Construcției (disponibilă la dezvoltator/proiectant)",
             "Solicitare Proces Verbal de Recepție la Terminarea Lucrărilor (conform Legii 10/1995)",
@@ -1408,4 +1636,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

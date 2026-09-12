@@ -243,3 +243,90 @@ def test_genereaza_raport_complet_pdf_cu_colectii_dict(tmp_path: Path) -> None:
     cale_rezultat = genereaza_raport_complet_pdf(date_proprietate, cale_iesire=dest_pdf)
     assert os.path.exists(cale_rezultat)
     assert os.path.getsize(cale_rezultat) > 1000
+
+
+def _extrage_text_pdf_streams(cale_pdf: str) -> str:
+    import base64
+    import zlib
+    with open(cale_pdf, "rb") as fp:
+        raw = fp.read()
+    parts = raw.split(b"endstream")
+    all_txt = []
+    for p in parts[:-1]:
+        if b"stream" in p:
+            s = p.split(b"stream")[1].strip()
+            if not s.endswith(b"~>"):
+                s += b"~>"
+            if not s.startswith(b"<~"):
+                s = b"<~" + s
+            try:
+                fl = zlib.decompress(base64.a85decode(s, adobe=True))
+                all_txt.append(fl.decode("latin1", errors="ignore"))
+            except Exception:
+                pass
+    return "\n".join(all_txt)
+
+
+def test_genereaza_raport_complet_pdf_toate_cele_12_capitole(tmp_path: Path) -> None:
+    """Verifică generarea completă a raportului cu DEMO_AUDIT_DATA și prezența tuturor celor 12 capitole numerotate."""
+    from gemini_act.api.demo_data import DEMO_AUDIT_DATA
+
+    dest_pdf = str(tmp_path / "test_raport_complet_12_capitole.pdf")
+    cale_rezultat = genereaza_raport_complet_pdf(DEMO_AUDIT_DATA, cale_iesire=dest_pdf)
+    assert os.path.exists(cale_rezultat)
+    assert os.path.getsize(cale_rezultat) > 10000
+
+    text_pdf = _extrage_text_pdf_streams(cale_rezultat)
+    capitole_asteptate = [
+        "1. Sintez",
+        "2. Evaluare de Pia",
+        "3. Localizare Urban",
+        "4. Audit Exterior",
+        "5. Audit Finisaje",
+        "6. Catalog Electrocasnice",
+        "7. Profil Dezvoltator",
+        "8. Reputa",
+        "9. Contextul Pie",
+        "10. Checklist Tehnic",
+        "11. Metodologie",
+        "12. Concluzie Final",
+    ]
+    for ch in capitole_asteptate:
+        num = ch.split(".")[0]
+        kw = ch.split(".")[1].strip()
+        assert (f"({num}." in text_pdf) or (f"{num}. " in text_pdf and kw in text_pdf), f"Capitolul {ch} nu a fost găsit în PDF!"
+
+
+def test_genereaza_raport_complet_pdf_minimal_toate_cele_12_capitole(tmp_path: Path) -> None:
+    """Verifică că un payload minim generează fără excepție toate cele 12 capitole cu carduri/tabele de fallback."""
+    dest_pdf = str(tmp_path / "test_raport_minimal_12_capitole.pdf")
+    minimal_data = {
+        "id": "min-fallback-test",
+        "titlu": "Garsonieră Centrală",
+        "pret_total": 75000,
+        "moneda": "EUR",
+        "suprafata_utila": 38,
+    }
+    cale_rezultat = genereaza_raport_complet_pdf(minimal_data, cale_iesire=dest_pdf)
+    assert os.path.exists(cale_rezultat)
+
+    text_pdf = _extrage_text_pdf_streams(cale_rezultat)
+    capitole_asteptate = [
+        "1. Sintez",
+        "2. Evaluare de Pia",
+        "3. Localizare Urban",
+        "4. Audit Exterior",
+        "5. Audit Finisaje",
+        "6. Catalog Electrocasnice",
+        "7. Profil Dezvoltator",
+        "8. Reputa",
+        "9. Contextul Pie",
+        "10. Checklist Tehnic",
+        "11. Metodologie",
+        "12. Concluzie Final",
+    ]
+    for ch in capitole_asteptate:
+        num = ch.split(".")[0]
+        kw = ch.split(".")[1].strip()
+        assert (f"({num}." in text_pdf) or (f"{num}. " in text_pdf and kw in text_pdf), f"Capitolul {ch} lipsește din PDF-ul minimal!"
+

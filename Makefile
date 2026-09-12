@@ -1,10 +1,13 @@
-.PHONY: help install local dev serve tunnel test lint fmt setup deploy
+.PHONY: help install install-obscura local dev serve tunnel test lint fmt setup deploy
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
 install:  ## Sync the virtualenv from the lockfile
 	uv sync
+
+install-obscura:  ## Install the Obscura headless browser binary
+	./scripts/install_obscura.sh
 
 local:  ## Run the full app locally (FastAPI backend + React Web UI)
 	./start_local.sh

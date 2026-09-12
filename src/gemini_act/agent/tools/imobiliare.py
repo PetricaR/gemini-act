@@ -85,9 +85,113 @@ def _disabled() -> dict[str, Any]:
     return {
         "status": "error",
         "error_message": (
-            "Property tools are disabled on this deployment "
-            "(GEMINI_ACT_IMOBILIARE_ENABLED=false)."
+            "Property tools are disabled on this deployment (GEMINI_ACT_IMOBILIARE_ENABLED=false)."
         ),
+    }
+
+
+async def cauta_imobiliare_obscura(
+    query: str,
+    pret_max: int | None = None,
+    pret_min: int | None = None,
+    camere: int | None = None,
+    suprafata_min: float | None = None,
+    metrou_max_m: float | None = None,
+    zona: str | None = None,
+    oras: str | None = None,
+    doar_proprietari: bool = False,
+    sort: str = "metro",
+    limit: int = 15,
+    url: str | None = None,
+    eval_js: str | None = None,
+) -> dict[str, Any]:
+    """Search imobiliare.ro or inspect web listings using the Obscura headless browser.
+
+    Unlike the legacy AI search, this tool does NOT rely on temporary browser
+    sessions and does not expire. It can run natural language searches, filter
+    listings by price/rooms/metro, or directly inspect an imobiliare.ro URL.
+
+    Args:
+        query: What the user is looking for, Romanian or English, e.g.
+            "apartament 2 camere Titan sub 90000 euro".
+        pret_max: Maximum price in EUR.
+        pret_min: Minimum price in EUR.
+        camere: Exact number of rooms.
+        suprafata_min: Minimum usable surface in square metres.
+        metrou_max_m: Maximum walking distance to a metro station, in metres.
+        zona: Neighbourhood substring, e.g. "Titan", "Floreasca", "Dristor".
+        oras: City or sector substring, e.g. "București", "Sector 3".
+        doar_proprietari: Only listings posted directly by owners, no agencies.
+        sort: One of "metro", "price", "price_desc", "price_per_sqm", "surface",
+            "newest", "year_built", "relevance".
+        limit: Maximum listings to return, 1-50.
+        url: Optional direct imobiliare.ro URL to fetch and inspect via Obscura.
+        eval_js: Optional JavaScript code to evaluate in page context (via Obscura --eval).
+
+    Returns:
+        A dict with status, listings, assistant reply, and metadata.
+    """
+    if not get_settings().imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.obscura import ObscuraBrowser, search_imobiliare_obscura
+        from gemini_act.imobiliare_mcp.server import Filters
+
+        # Direct URL inspection via Obscura
+        if url:
+            browser = ObscuraBrowser()
+            res = browser.fetch(
+                url=url,
+                eval_js=eval_js or "document.title",
+                stealth=True,
+                wait_until="domcontentloaded",
+                wait=3,
+            )
+            return {
+                "engine": "obscura_fetch",
+                "page_url": url,
+                "title": res.title or res.output,
+                "output": res.output,
+                "success": res.success,
+                "error": res.error,
+                "data": res.data,
+            }
+
+        filters = Filters(
+            pret_max=pret_max,
+            pret_min=pret_min,
+            camere=camere,
+            suprafata_min=suprafata_min,
+            metrou_max_m=metrou_max_m,
+            zona=zona,
+            oras=oras,
+            tip_vanzator="individual" if doar_proprietari else None,
+        )
+        return search_imobiliare_obscura(
+            query=query,
+            filters=filters,
+            sort=sort,  # type: ignore[arg-type]
+            limit=max(1, min(limit, 50)),
+        )
+
+    try:
+        result = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Obscura property search", exc)
+
+    if error := result.get("error"):
+        return {"status": "error", "error_message": str(error)}
+
+    return {
+        "status": "success",
+        "engine": result.get("engine", "obscura"),
+        "assistant_reply": result.get("assistant_reply"),
+        "total_hits_before_filters": result.get("total_hits_before_filters"),
+        "matched": result.get("matched"),
+        "listings": [_trim(x) for x in result.get("listings") or []],
+        "page_url": result.get("page_url"),
+        "output": result.get("output"),
     }
 
 
@@ -109,10 +213,9 @@ async def cauta_proprietati(
     named arguments — the search layer interprets intent but does not enforce
     limits, so a price cap written only in the query text will not be applied.
 
-    This is the one property tool that needs a captured browser session and it
-    expires within minutes, so it fails more often than it works. When it does
-    fail, say so and offer `evalueaza_proprietate` on a specific listing instead,
-    which needs no session at all.
+    Uses AI search when an active browser session exists, and automatically
+    falls back to the autonomous Obscura search engine when temporary browser
+    sessions expire.
 
     Args:
         query: What the user is looking for, Romanian or English, e.g.
@@ -155,14 +258,20 @@ async def cauta_proprietati(
     except Exception as exc:  # noqa: BLE001 - every failure is reported, never raised
         return _failure("Property search", exc)
 
-    if error := result.get("error"):
-        return {
-            "status": "error",
-            "error_message": (
-                f"{error} Search needs a browser-captured session that expires within "
-                "minutes. Valuation and listing details do not — offer those instead."
-            ),
-        }
+    if result.get("error"):
+        # Auto-fallback to Obscura search engine
+        return await cauta_imobiliare_obscura(
+            query=query,
+            pret_max=pret_max,
+            pret_min=pret_min,
+            camere=camere,
+            suprafata_min=suprafata_min,
+            metrou_max_m=metrou_max_m,
+            zona=zona,
+            doar_proprietari=doar_proprietari,
+            sort=sort,
+            limit=limit,
+        )
     return {
         "status": "success",
         "assistant_reply": result.get("assistant_reply"),
@@ -170,6 +279,7 @@ async def cauta_proprietati(
         "matched": result.get("matched"),
         "resume_token": result.get("resume_token"),
         "listings": [_trim(x) for x in result.get("listings") or []],
+        "session_warning": result.get("session_warning"),
     }
 
 
@@ -797,6 +907,7 @@ async def analizeaza_electrocasnice_si_defecte_finisaje(
 
 IMOBILIARE_TOOLS = [
     cauta_proprietati,
+    cauta_imobiliare_obscura,
     reia_cautare,
     detalii_proprietate,
     statistici_piata,
@@ -812,6 +923,3 @@ IMOBILIARE_TOOLS = [
     recenzii_reputatie_google_maps,
     genereaza_raport_complet_pdf,
 ]
-
-
-

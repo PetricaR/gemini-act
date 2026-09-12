@@ -613,4 +613,91 @@ DEMO_AUDIT_DATA: dict[str, Any] = {
         "cadastru_si_intabulare": "Intabulat individual, liber de sarcini și ipoteci bancare.",
         "certificat_energetic": "Clasa A, consum specific redus de energie.",
     },
+    "lat": 44.4795,
+    "lon": 26.0988,
+    "locatie": {
+        "status": "success",
+        "lat": 44.4795,
+        "lon": 26.0988,
+        "adresa_formatata": "Șoseaua Pipera 4B, Sector 1, București",
+        "precizie": "adresa",
+        "google_maps_url": "https://www.google.com/maps/search/?api=1&query=44.4795,26.0988",
+        "scor_accesibilitate": 9.4,
+        "total_facilitati": 18,
+        "harta": {
+            "url": "/api/audit/imagery/roadmap?lat=44.4795&lon=26.0988&zoom=16&w=640&h=640",
+            "zoom": 16,
+            "latime": 640,
+            "inaltime": 640,
+            "raza_m": 500,
+            "metri_pe_pixel": 1.25,
+            "atribuire": "Hartă © Google",
+        },
+        "satelit": {
+            "url": "/api/audit/imagery/aerial?lat=44.4795&lon=26.0988&zoom=18&w=640&h=480",
+            "zoom": 18,
+            "atribuire": "Esri, Maxar, Earthstar Geographics",
+        },
+        "street_view": {
+            "disponibil": True,
+            "data_captura": "2023-08",
+            "copyright": "© Google",
+            "unghiuri": [
+                {"heading": 0, "eticheta": "Fațada clădirii", "url": "/api/audit/imagery/streetview?lat=44.4795&lon=26.0988&heading=0&w=480&h=320"},
+                {"heading": 90, "eticheta": "Acces stradal est", "url": "/api/audit/imagery/streetview?lat=44.4795&lon=26.0988&heading=90&w=480&h=320"},
+                {"heading": 180, "eticheta": "Perspectivă sud", "url": "/api/audit/imagery/streetview?lat=44.4795&lon=26.0988&heading=180&w=480&h=320"},
+                {"heading": 270, "eticheta": "Perspectivă vest", "url": "/api/audit/imagery/streetview?lat=44.4795&lon=26.0988&heading=270&w=480&h=320"},
+            ],
+        },
+        "facilitati": {
+            "metrou": [
+                {"nume": "Stația de Metrou Aurel Vlaicu (M2)", "categorie": "metrou", "distanta_m": 420, "minute_mers": 5, "rating": 4.6, "lat": 44.4781, "lon": 26.1012},
+            ],
+            "transport": [
+                {"nume": "Stația STB Calea Floreasca (Linii 135, 112)", "categorie": "transport", "distanta_m": 160, "minute_mers": 2, "rating": 4.2, "lat": 44.4790, "lon": 26.0975},
+                {"nume": "Stația Tramvai Barbu Văcărescu (Linia 5)", "categorie": "transport", "distanta_m": 380, "minute_mers": 5, "rating": 4.0, "lat": 44.4775, "lon": 26.1020},
+            ],
+            "parcuri": [
+                {"nume": "Parcul Herăstrău (Regele Mihai I)", "categorie": "parcuri", "distanta_m": 650, "minute_mers": 8, "rating": 4.8, "lat": 44.4820, "lon": 26.0910},
+                {"nume": "Parcul Bordei", "categorie": "parcuri", "distanta_m": 480, "minute_mers": 6, "rating": 4.6, "lat": 44.4760, "lon": 26.0935},
+            ],
+            "supermarket": [
+                {"nume": "Mega Image Concept Store Barbu Văcărescu", "categorie": "supermarket", "distanta_m": 280, "minute_mers": 3, "rating": 4.4, "lat": 44.4780, "lon": 26.0960},
+                {"nume": "Carrefour Express Pipera", "categorie": "supermarket", "distanta_m": 350, "minute_mers": 4, "rating": 4.2, "lat": 44.4810, "lon": 26.1025},
+                {"nume": "Lidl Pipera", "categorie": "supermarket", "distanta_m": 490, "minute_mers": 6, "rating": 4.3, "lat": 44.4825, "lon": 26.1040},
+            ],
+            "mall": [
+                {"nume": "Promenada Mall București", "categorie": "mall", "distanta_m": 490, "minute_mers": 6, "rating": 4.6, "lat": 44.4770, "lon": 26.1045},
+            ],
+            "medical": [
+                {"nume": "Clinica Regina Maria Pipera", "categorie": "medical", "distanta_m": 390, "minute_mers": 5, "rating": 4.5, "lat": 44.4805, "lon": 26.1030},
+                {"nume": "Centrul Medical Medicover Floreasca", "categorie": "medical", "distanta_m": 520, "minute_mers": 7, "rating": 4.3, "lat": 44.4755, "lon": 26.0980},
+            ],
+            "scoli": [
+                {"nume": "Școala Gimnazială Herăstrău", "categorie": "scoli", "distanta_m": 450, "minute_mers": 6, "rating": 4.3, "lat": 44.4815, "lon": 26.0940},
+            ],
+            "gradinite": [
+                {"nume": "Grădinița Little Learners Aviației", "categorie": "gradinite", "distanta_m": 310, "minute_mers": 4, "rating": 4.7, "lat": 44.4785, "lon": 26.0950},
+            ],
+            "sport": [
+                {"nume": "World Class Upground & Piscină", "categorie": "sport", "distanta_m": 430, "minute_mers": 5, "rating": 4.5, "lat": 44.4765, "lon": 26.1035},
+            ],
+            "farmacii": [
+                {"nume": "Farmacia Catena Promenada", "categorie": "farmacii", "distanta_m": 490, "minute_mers": 6, "rating": 4.3, "lat": 44.4771, "lon": 26.1044},
+                {"nume": "Farmacia Dr. Max Pipera", "categorie": "farmacii", "distanta_m": 320, "minute_mers": 4, "rating": 4.2, "lat": 44.4800, "lon": 26.1010},
+            ],
+        },
+        "meta_categorii": {
+            "metrou": {"eticheta": "Metrou", "icon": "train-front", "culoare": "#4338ca"},
+            "transport": {"eticheta": "Transport public", "icon": "bus", "culoare": "#0891b2"},
+            "parcuri": {"eticheta": "Parcuri", "icon": "trees", "culoare": "#15803d"},
+            "supermarket": {"eticheta": "Supermarketuri", "icon": "shopping-cart", "culoare": "#0284c7"},
+            "mall": {"eticheta": "Centre comerciale", "icon": "shopping-bag", "culoare": "#7c3aed"},
+            "medical": {"eticheta": "Medical", "icon": "stethoscope", "culoare": "#e11d48"},
+            "scoli": {"eticheta": "Școli", "icon": "school", "culoare": "#c2410c"},
+            "gradinite": {"eticheta": "Grădinițe & creșe", "icon": "baby", "culoare": "#db2777"},
+            "sport": {"eticheta": "Sport & fitness", "icon": "dumbbell", "culoare": "#ea580c"},
+            "farmacii": {"eticheta": "Farmacii", "icon": "pill", "culoare": "#dc2626"},
+        },
+    },
 }

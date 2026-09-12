@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-_PRICE = re.compile(r"([\d.]+)\s*€")           # "108.000 €" -- "." is a thousands sep
+_PRICE = re.compile(r"([\d.]+)\s*€")  # "108.000 €" -- "." is a thousands sep
 _DISTANCE = re.compile(r"([\d.,]+)\s*(km|m)\b")  # "405 m (5 min)" / "1,2 km"
 _FIRST_INT = re.compile(r"(\d+)")
 _FIRST_NUM = re.compile(r"(\d+(?:[.,]\d+)?)")
@@ -75,9 +75,9 @@ def _floor(label: str | None) -> tuple[int | None, int | None]:
         if m.group(1):
             floor = int(m.group(1))
         elif m.group(2):
-            floor = 0          # parter
+            floor = 0  # parter
         elif m.group(3):
-            floor = -1         # demisol
+            floor = -1  # demisol
         elif m.group(4):
             floor = _MANSARDA  # mansardă -- always the top
     return floor, int(total.group(1)) if total else None
@@ -105,6 +105,10 @@ def normalise(listing: dict[str, Any], explanation: dict[str, str] | None = None
     if rl := _highlight(listing, "bedroom_count"):
         if rm := _FIRST_INT.search(rl):
             rooms = int(rm.group(1))
+    if rooms is None and (gr := _num(g.get("rooms"))):
+        rooms = int(gr)
+    if rooms is None and (cr := _num((listing.get("characteristics") or {}).get("rooms"))):
+        rooms = int(cr)
 
     year = _num(_text(g.get("propertyYear")))
     if year is None and (yl := _highlight(listing, "year_built")):
@@ -139,7 +143,7 @@ def normalise(listing: dict[str, Any], explanation: dict[str, str] | None = None
         "metro_label": listing.get("metroDistance"),
         "exact_location": "Locație exactă" in feats or "Locație Verificată" in feats,
         # seller / offer
-        "seller_type": _text(g.get("sellerType")),          # agency | individual | developer
+        "seller_type": _text(g.get("sellerType")),  # agency | individual | developer
         "agency": listing.get("agencyName"),
         "commission_zero": "Comision 0%" in feats,
         "exclusive": "Exclusivitate" in feats,

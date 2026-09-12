@@ -106,9 +106,7 @@ def test_every_amenity_category_maps_to_a_place_type():
 
 
 def test_vision_is_skipped_when_disabled(monkeypatch):
-    monkeypatch.setattr(
-        viziune, "get_settings", lambda: _settings(imobiliare_vision_enabled=False)
-    )
+    monkeypatch.setattr(viziune, "get_settings", lambda: _settings(imobiliare_vision_enabled=False))
     assert viziune.analyse({}, ["https://example.invalid/a.jpg"]) is None
 
 
@@ -196,17 +194,42 @@ async def test_a_raised_exception_becomes_a_reported_failure(monkeypatch):
     assert "upstream is down" in result["error_message"]
 
 
-async def test_a_session_failure_points_at_what_still_works(monkeypatch):
-    """Search needs a session that usually is not there; the agent should be
-    told the valuation path does not."""
+async def test_a_session_failure_falls_back_to_obscura(monkeypatch):
+    """When server.cauta reports a session error, cauta_proprietati
+    seamlessly falls back to Obscura search."""
     monkeypatch.setattr(tools, "get_settings", lambda: _settings())
     monkeypatch.setattr(
         "gemini_act.imobiliare_mcp.server.cauta",
         lambda **k: {"error": "No session_id configured."},
     )
+    monkeypatch.setattr(
+        "gemini_act.imobiliare_mcp.obscura.search_imobiliare_obscura",
+        lambda **k: {
+            "engine": "obscura",
+            "matched": 1,
+            "listings": [{"id": "123", "title": "Listing Obscura"}],
+        },
+    )
+    result = await tools.cauta_proprietati("apartament 3 camere")
+    assert result["status"] == "success"
+    assert result["engine"] == "obscura"
+    assert len(result["listings"]) == 1
+
+
+async def test_a_search_failure_when_both_engines_fail(monkeypatch):
+    """When both legacy search and Obscura fail, an error status is returned."""
+    monkeypatch.setattr(tools, "get_settings", lambda: _settings())
+    monkeypatch.setattr(
+        "gemini_act.imobiliare_mcp.server.cauta",
+        lambda **k: {"error": "No session_id configured."},
+    )
+    monkeypatch.setattr(
+        "gemini_act.imobiliare_mcp.obscura.search_imobiliare_obscura",
+        lambda **k: {"error": "Obscura failed to fetch sitemap"},
+    )
     result = await tools.cauta_proprietati("apartament 3 camere")
     assert result["status"] == "error"
-    assert "Valuation and listing details do not" in result["error_message"]
+    assert "Obscura failed to fetch sitemap" in result["error_message"]
 
 
 async def test_the_report_is_staged_not_returned_as_text(monkeypatch, tmp_path):
@@ -383,9 +406,7 @@ def test_raport_renders_image_links_and_accessibility_score():
 
 
 async def test_analizeaza_mobilier_si_finisaje_disabled(monkeypatch):
-    monkeypatch.setattr(
-        tools, "get_settings", lambda: _settings(imobiliare_enabled=False)
-    )
+    monkeypatch.setattr(tools, "get_settings", lambda: _settings(imobiliare_enabled=False))
     res = await tools.analizeaza_mobilier_si_finisaje("12345")
     assert res["status"] == "error"
     assert "disabled" in res["error_message"]
@@ -562,5 +583,3 @@ def test_viziune_furniture_finishes_markdown_rendering():
     assert "Parchet laminat 10mm" in md
     assert "✅ Bucătărie echipată complet" in md
     assert "⚠️ Baia necesită reîmprospătare" in md
-
-

@@ -12,6 +12,18 @@ FROM python:3.12-slim
 # uv gives us a fast, lockfile-exact install.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
+# Install obscura headless browser
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends curl tar ca-certificates && \
+    case "${TARGETARCH:-amd64}" in \
+      "arm64") URL="https://github.com/h4ckf0r0day/obscura/releases/latest/download/obscura-aarch64-linux.tar.gz" ;; \
+      *) URL="https://github.com/h4ckf0r0day/obscura/releases/latest/download/obscura-x86_64-linux.tar.gz" ;; \
+    esac && \
+    curl -fsSL "$URL" -o /tmp/obscura.tar.gz && \
+    tar -xzf /tmp/obscura.tar.gz -C /usr/local/bin/ && \
+    chmod +x /usr/local/bin/obscura* && \
+    rm -rf /tmp/obscura.tar.gz /var/lib/apt/lists/*
+
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PYTHONUNBUFFERED=1 \
