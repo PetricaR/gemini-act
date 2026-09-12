@@ -156,3 +156,90 @@ def test_agent_tool_genereaza_raport_complet_pdf(tmp_path: Path) -> None:
     )
     assert res["status"] == "success"
     assert os.path.exists(res["cale_pdf"])
+
+
+def test_genereaza_raport_complet_pdf_cu_poze_street_dict(tmp_path: Path) -> None:
+    """Verifică generarea PDF când imagini_salvate este dict (formatul returnat de viziune_strada)."""
+    # Create fake image files to verify image inclusion
+    img1 = tmp_path / "streetview_h0.jpg"
+    # Minimal 1x1 JPEG bytes
+    img1.write_bytes(
+        b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00"
+        b"\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t"
+        b"\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a"
+        b"\x1f\x1e\x1d\x1a\x1c\x1c $.' \",#\x1c\x1c(7),01444\x1f'9=82<.342"
+        b"\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4"
+        b"\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00"
+        b"\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b"
+        b"\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xbf\x00\xff\xd9"
+    )
+
+    dest_pdf = str(tmp_path / "test_raport_streetview_dict.pdf")
+    date_proprietate = {
+        "id": "imobil-sv-dict",
+        "titlu": "Apartament Unirii",
+        "pret_total": 200000,
+        "moneda": "EUR",
+        "suprafata_utila": 80,
+        "audit_exterior": {
+            "status": "disponibil",
+            "disponibil": True,
+            "evaluare_globala_exterior": {
+                "scor_calitate_cladire_si_fatada": 8,
+                "scor_ambient_strada_si_zona": 7,
+                "concluzie_audit_exterior": "Zonă urbană bine conectată.",
+            },
+            "cladire_si_fatada": {
+                "stare_generala_fatada": "Bună, anvelopat recent",
+            },
+            "imagini_salvate": {
+                "Fațadă și Vedere Nord": str(img1),
+                "În lungul străzii (Est)": "fisier_inexistent.jpg",
+            },
+        },
+    }
+
+    cale_rezultat = genereaza_raport_complet_pdf(date_proprietate, cale_iesire=dest_pdf)
+    assert os.path.exists(cale_rezultat)
+    assert os.path.getsize(cale_rezultat) > 1000
+
+
+def test_genereaza_raport_complet_pdf_cu_colectii_dict(tmp_path: Path) -> None:
+    """Verifică că secțiunile nu crapă când liste precum comps sau elemente sunt dict-uri."""
+    dest_pdf = str(tmp_path / "test_raport_dict_collections.pdf")
+    date_proprietate = {
+        "id": "imobil-dict-colls",
+        "titlu": "Apartament Dict Collections",
+        "pret_total": 150000,
+        "moneda": "EUR",
+        "suprafata_utila": 60,
+        "evaluare_anevar": {
+            "comparabile_utilizate": {
+                "c1": {"id": "c1", "pret": 140000, "suprafata": 58, "pret_mp": 2413, "ajustare_neta_procent": 1.0},
+            },
+        },
+        "audit_mobilier": {
+            "elemente_identificate": {
+                "e1": {"camera": "Living", "element": "Canapea", "material": "Textil", "nivel_calitate": "Medie"},
+            },
+        },
+        "audit_electrocasnice": {
+            "electrocasnice": {
+                "el1": {"aparat": "Frigider", "camera": "Bucătărie", "pret_estimat_nou_eur": 600, "valoare_piata_actuala_eur": 300},
+            },
+            "defecte_si_probleme": {
+                "d1": {"element_afectat": "Perete", "descriere_defect": "Fisură", "severitate": "Minoră", "cost_estimat_remediere_eur": 50},
+            },
+        },
+        "audit_exterior": {
+            "status": "disponibil",
+            "disponibil": True,
+            "imagini_salvate": {
+                "cale": "imagine_fara_eticheta.jpg",
+            },
+        },
+    }
+
+    cale_rezultat = genereaza_raport_complet_pdf(date_proprietate, cale_iesire=dest_pdf)
+    assert os.path.exists(cale_rezultat)
+    assert os.path.getsize(cale_rezultat) > 1000

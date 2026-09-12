@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from gemini_act.api import imagery
 from gemini_act.api.demo_data import DEMO_AUDIT_DATA
-from gemini_act.imobiliare_mcp import generator_pdf, server
+from gemini_act.imobiliare_mcp import generator_pdf, paths, server
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +150,7 @@ async def download_pdf_report(filename: str) -> FileResponse:
 
     # Căutare în directoarele de ieșire uzuale
     possible_dirs = [
+        paths.reports_dir(),
         Path("/tmp"),
         Path(os.getcwd()) / "reports",
         Path("/app/reports"),

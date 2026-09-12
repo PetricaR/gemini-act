@@ -5,6 +5,7 @@ from __future__ import annotations
 import itertools
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from reportlab.lib.colors import HexColor, white
@@ -459,6 +460,10 @@ def genereaza_raport_complet_pdf(
 
         # Grilă comparabile
         comps = eval_anevar.get("comparabile_utilizate", [])
+        if isinstance(comps, dict):
+            comps = list(comps.values())
+        elif not isinstance(comps, (list, tuple)):
+            comps = []
         if comps:
             linii_comps = [["ID Ofertă", "Preț Solicitat", "Suprafață", "Preț/mp", "Ajustare Netă"]]
             for c in comps[:4]:
@@ -515,6 +520,10 @@ def genereaza_raport_complet_pdf(
             poveste.append(Spacer(1, 8))
 
             elemente = audit_mob.get("elemente_identificate", [])
+            if isinstance(elemente, dict):
+                elemente = list(elemente.values())
+            elif not isinstance(elemente, (list, tuple)):
+                elemente = []
             if elemente:
                 linii_el = [
                     ["Încăpere / Zonă", "Obiecte Identificate", "Material / Tip", "Calitate"]
@@ -588,6 +597,10 @@ def genereaza_raport_complet_pdf(
                 poveste.append(Spacer(1, 8))
 
             electro = audit_ef.get("electrocasnice") or []
+            if isinstance(electro, dict):
+                electro = list(electro.values())
+            elif not isinstance(electro, (list, tuple)):
+                electro = []
             if electro:
                 poveste.append(
                     Paragraph(
@@ -618,6 +631,10 @@ def genereaza_raport_complet_pdf(
                 or audit_ef.get("defecte_identificate")
                 or []
             )
+            if isinstance(defecte, dict):
+                defecte = list(defecte.values())
+            elif not isinstance(defecte, (list, tuple)):
+                defecte = []
             if defecte:
                 poveste.append(
                     Paragraph(
@@ -664,10 +681,29 @@ def genereaza_raport_complet_pdf(
             )
             poveste.append(Spacer(1, 10))
         else:
-            scor_fatada = audit_ext.get("scor_fatada", "N/A")
-            scor_strada = audit_ext.get("scor_strada", "N/A")
-            stare_str = audit_ext.get("stare_fatada", "N/A")
-            concluzie_ext = audit_ext.get("concluzie_generala_exterior", "N/A")
+            eval_glob = audit_ext.get("evaluare_globala_exterior") or {}
+            cladire = audit_ext.get("cladire_si_fatada") or {}
+
+            scor_fatada = (
+                audit_ext.get("scor_fatada")
+                or eval_glob.get("scor_calitate_cladire_si_fatada")
+                or "N/A"
+            )
+            scor_strada = (
+                audit_ext.get("scor_strada")
+                or eval_glob.get("scor_ambient_strada_si_zona")
+                or "N/A"
+            )
+            stare_str = (
+                audit_ext.get("stare_fatada")
+                or cladire.get("stare_generala_fatada")
+                or "N/A"
+            )
+            concluzie_ext = (
+                audit_ext.get("concluzie_generala_exterior")
+                or eval_glob.get("concluzie_audit_exterior")
+                or "N/A"
+            )
 
             text_ext = (
                 f"<b>Stare Fațadă:</b> {stare_str} (Scor {scor_fatada}/10) • "
@@ -686,17 +722,44 @@ def genereaza_raport_complet_pdf(
 
         # Inserare imagini Street View dacă sunt prezente
         poze_street = audit_ext.get("imagini_salvate", [])
-        if poze_street:
+        if isinstance(poze_street, dict):
+            if "cale" in poze_street or "url" in poze_street or "path" in poze_street:
+                lista_poze = [poze_street]
+            else:
+                lista_poze = list(poze_street.values())
+        elif isinstance(poze_street, (list, tuple)):
+            lista_poze = list(poze_street)
+        else:
+            lista_poze = []
+
+        if lista_poze:
             rand_poze = []
-            for p in poze_street[:2]:
-                cale_p = p.get("cale") if isinstance(p, dict) else str(p)
-                if cale_p and os.path.exists(cale_p):
+            for p in lista_poze[:2]:
+                cale_p = (
+                    p.get("cale") or p.get("path") or p.get("url")
+                    if isinstance(p, dict)
+                    else str(p)
+                )
+                if not cale_p:
+                    continue
+
+                if not os.path.exists(cale_p):
+                    rep_dir = paths.reports_dir()
+                    if rep_dir and (rep_dir / cale_p).exists():
+                        cale_p = str(rep_dir / cale_p)
+                    elif cale_iesire and (Path(cale_iesire).parent / cale_p).exists():
+                        cale_p = str(Path(cale_iesire).parent / cale_p)
+                    elif paths.cache_dir() and (paths.cache_dir() / cale_p).exists():
+                        cale_p = str(paths.cache_dir() / cale_p)
+
+                if os.path.exists(cale_p):
                     try:
                         rand_poze.append(Image(cale_p, width=238, height=140))
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Nu s-a putut încărca imaginea %s: %s", cale_p, exc)
             if rand_poze:
-                tabel_poze = Table([rand_poze], colWidths=[243, 244])
+                col_widths = [243, 244] if len(rand_poze) == 2 else [487]
+                tabel_poze = Table([rand_poze], colWidths=col_widths)
                 tabel_poze.setStyle(TableStyle([
                     ("ALIGN", (0, 0), (-1, -1), "CENTER"),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
