@@ -9,6 +9,8 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { eur, eurPerSqm, num, percent, priceDelta, priceGap, sqm } from '../lib/format.js';
+import ProvenanceBadge from './ProvenanceBadge.jsx';
+import UnavailableBlock from './UnavailableBlock.jsx';
 
 /**
  * The comparison approach (SEV 103 / GEV 630 §54-58) in full: the gauge, the
@@ -22,12 +24,87 @@ export default function ValuationMeter({ evaluare, pretTotal, suprafata }) {
   const [openComparable, setOpenComparable] = useState(null);
   if (!evaluare) return null;
 
+  const comparables = evaluare.comparabile_utilizate || [];
+  const isUnavailable =
+    evaluare.status === 'indisponibil' ||
+    evaluare.disponibil === false ||
+    !evaluare.valoare_estimata_piata ||
+    comparables.length < 3;
+
+  if (isUnavailable) {
+    return (
+      <section id="evaluare" className="card card-pad mb-6">
+        <div className="card-head">
+          <div className="flex items-start gap-3">
+            <div className="icon-tile border-slate-200 bg-slate-50 text-slate-500">
+              <Calculator className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="section-title">Evaluare comparativă ANEVAR (GEV 630)</h3>
+                <ProvenanceBadge
+                  provenance="indisponibil"
+                  detail="Sub 3 comparabile"
+                />
+              </div>
+              <p className="section-sub">
+                Analiză pe proprietăți comparabile din aceeași arie conform standardelor ANEVAR.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <UnavailableBlock
+          title="Evaluare de piață nedeterminată (eșantion insuficient)"
+          reason={
+            evaluare.motiv ||
+            `Standardul ANEVAR GEV 630 impune un eșantion de minimum 3 tranzacții sau oferte comparabile calificate pentru determinarea valorii de piață. Au fost găsite doar ${comparables.length} comparabile în arie; extrapolarea valorică pe un eșantion sub minim este interzisă metodologic.`
+          }
+          provenance="indisponibil"
+        />
+
+        {comparables.length > 0 && (
+          <div className="mt-6">
+            <div className="label mb-2 text-slate-700">
+              Proprietăți comparabile identificate ({comparables.length} din minim 3 necesare):
+            </div>
+            <div className="overflow-x-auto">
+              <table className="data-table min-w-[720px]">
+                <thead>
+                  <tr>
+                    <th>Adresă / complex</th>
+                    <th>Preț</th>
+                    <th>Suprafață</th>
+                    <th>Preț / mp</th>
+                    <th>Distanță</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {comparables.map((comparable, index) => (
+                    <tr key={comparable.id || comparable.adresa || index}>
+                      <td className="font-semibold text-slate-900">{comparable.adresa}</td>
+                      <td className="font-semibold tabular-nums">{eur(comparable.pret_total || comparable.pret)}</td>
+                      <td className="tabular-nums">{sqm(comparable.suprafata_utila || comparable.suprafata)}</td>
+                      <td className="tabular-nums">{eurPerSqm(comparable.pret_mp || comparable.pret_mp_eur)}</td>
+                      <td className="tabular-nums">
+                        {comparable.distanta_km != null ? `${num(comparable.distanta_km, 2)} km` : '< 1 km'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </section>
+    );
+  }
+
   const marketValue = evaluare.valoare_estimata_piata || pretTotal || 0;
   const min = evaluare.interval_valoare_min || Math.round(marketValue * 0.95);
   const max = evaluare.interval_valoare_max || Math.round(marketValue * 1.05);
   const delta = priceDelta(pretTotal, marketValue, evaluare.ajustare_recomandata_procent);
   const margin = priceGap(pretTotal, marketValue, evaluare.marja_negociere_eur);
-  const comparables = evaluare.comparabile_utilizate || [];
   const overpriced = delta > 0;
 
   const askedPerSqm = suprafata > 0 ? Math.round((pretTotal || 0) / suprafata) : null;
@@ -49,7 +126,13 @@ export default function ValuationMeter({ evaluare, pretTotal, suprafata }) {
             <Calculator className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="section-title">Evaluare comparativă ANEVAR (GEV 630)</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="section-title">Evaluare comparativă ANEVAR (GEV 630)</h3>
+              <ProvenanceBadge
+                provenance={evaluare.provenienta || "estimat"}
+                detail="Model ANEVAR GEV 630"
+              />
+            </div>
             <p className="section-sub">
               Analiză pe proprietăți comparabile din aceeași arie, cu grilă de ajustări pe fiecare
               element de comparație.

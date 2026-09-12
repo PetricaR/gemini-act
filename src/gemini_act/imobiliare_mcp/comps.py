@@ -17,13 +17,13 @@ import time
 import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import httpx
 
+from . import paths
+
 SITEMAP = "https://www.imobiliare.ro/sitemap-listings-apartments-for-{deal}-{scope}.xml"
-CACHE_DIR = Path.home() / ".cache" / "imobiliare-mcp"
 CACHE_TTL = 24 * 3600  # sitemaps are regenerated daily; a day-old pool is fine
 
 _OFFER = re.compile(r"/oferta/apartament-de-(?:vanzare|inchiriat)-(.+?)-(\d+)$")
@@ -70,14 +70,20 @@ def _parse_offer(url: str) -> Offer | None:
 
 
 def _fetch_cached(url: str, timeout: float = 120.0) -> str:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cached = CACHE_DIR / (_slugify(url) + ".xml")
-    if cached.exists() and time.time() - cached.stat().st_mtime < CACHE_TTL:
+    # No writable cache (read-only filesystem on Cloud Run) must degrade to an
+    # uncached fetch, not fail the valuation that needed the sitemap.
+    cache = paths.ensure_dir(paths.cache_dir())
+    cached = cache / (_slugify(url) + ".xml") if cache else None
+    if cached and cached.exists() and time.time() - cached.stat().st_mtime < CACHE_TTL:
         return cached.read_text(encoding="utf-8")
     with httpx.Client(timeout=timeout, headers=HEADERS, follow_redirects=True) as c:
         r = c.get(url)
         r.raise_for_status()
-    cached.write_text(r.text, encoding="utf-8")
+    if cached:
+        try:
+            cached.write_text(r.text, encoding="utf-8")
+        except OSError:
+            pass
     return r.text
 
 
@@ -130,22 +136,52 @@ def candidates(
     return [o for o in same if o.id != exclude]
 
 
+# What an unknown attribute costs a comparable, in the same units as the
+# distance terms below. A comparable that simply does not say what floor it is
+# on cannot be shown to be similar on that element, so it must not score better
+# than one that says so and differs -- otherwise the grid fills up with the
+# least documented listings. Set a little above a typical real difference: an
+# unknown is worse evidence than a known mismatch, but not disqualifying.
+_UNKNOWN_PENALTY = {
+    "year_built": 0.40,        # ≈ 10 years apart
+    "floor": 0.25,             # ≈ 3 floors apart
+    "metro_distance_m": 0.35,  # ≈ 420 m apart
+}
+
+
 def rank_by_similarity(subject: dict[str, Any], records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Closest comparables first: surface, then age, floor and metro distance.
 
     Weights follow how much each attribute actually moves price per sqm in
     this market, so the grid's smallest corrections land at the top.
+
+    An attribute missing on either side is penalised rather than skipped, so
+    that a listing carrying no evidence never outranks a documented one -- the
+    same rule the filters and sorts follow (see CLAUDE.md).
     """
     def distance(r: dict[str, Any]) -> float:
         score = 0.0
+
         if subject.get("surface_sqm") and r.get("surface_sqm"):
             score += 3.0 * abs(r["surface_sqm"] - subject["surface_sqm"]) / subject["surface_sqm"]
+        else:
+            score += 3.0 * 0.15    # surface is the heaviest term; ≈ 15% apart
+
         if subject.get("year_built") and r.get("year_built"):
             score += abs(r["year_built"] - subject["year_built"]) / 25.0
+        else:
+            score += _UNKNOWN_PENALTY["year_built"]
+
         if subject.get("floor") is not None and r.get("floor") is not None:
             score += abs(r["floor"] - subject["floor"]) / 12.0
+        else:
+            score += _UNKNOWN_PENALTY["floor"]
+
         if subject.get("metro_distance_m") and r.get("metro_distance_m"):
             score += abs(r["metro_distance_m"] - subject["metro_distance_m"]) / 1200.0
+        else:
+            score += _UNKNOWN_PENALTY["metro_distance_m"]
+
         return score
 
     return sorted(records, key=distance)

@@ -1,6 +1,8 @@
 import React from 'react';
 import { Award, Building2, Leaf, ShieldCheck } from 'lucide-react';
 import { num, percent, ron, scoreTone } from '../lib/format.js';
+import ProvenanceBadge from './ProvenanceBadge.jsx';
+import UnavailableBlock from './UnavailableBlock.jsx';
 
 /**
  * Who built it, and whether they are still solvent.
@@ -10,12 +12,31 @@ import { num, percent, ron, scoreTone } from '../lib/format.js';
  * a single-purpose vehicle that dissolves after handover is worth nothing.
  */
 export default function DeveloperAudit({ targetare, specs }) {
-  if (!targetare && !specs) return null;
+  const targetareUnavailable = !targetare || targetare.status === 'indisponibil' || targetare.disponibil === false;
+  const specRows = [
+    { label: 'Regim de înălțime', value: specs?.regim_inaltime },
+    { label: 'Structură de rezistență', value: specs?.structura_rezistenta },
+    { label: 'Închideri și pereți', value: specs?.inchideri_pereti },
+    { label: 'Termen de finalizare', value: specs?.termen_finalizare },
+  ].filter((row) => row.value);
+  const specsUnavailable = !specs || (!specs.dezvoltator && !specs.constructor && specRows.length === 0);
 
-  const company = targetare?.denumire || specs?.dezvoltator || '—';
-  const cui = targetare?.cui;
+  if (targetareUnavailable && specsUnavailable) {
+    return (
+      <section id="dezvoltator" className="card card-pad mb-6">
+        <UnavailableBlock
+          title="Due diligence dezvoltator &amp; constructor"
+          reason={targetare?.motiv || "Dezvoltatorul sau constructorul nu a fost menționat în anunț, iar datele financiare nu au putut fi identificate."}
+          provenance="indisponibil"
+        />
+      </section>
+    );
+  }
+
+  const company = (!targetareUnavailable && targetare?.denumire) || specs?.dezvoltator || '—';
+  const cui = !targetareUnavailable ? targetare?.cui : null;
   const constructor = specs?.constructor;
-  const rating = targetare?.scor_bonitate;
+  const rating = !targetareUnavailable ? targetare?.scor_bonitate : null;
   const tone = scoreTone(rating);
 
   const financials = [
@@ -25,13 +46,6 @@ export default function DeveloperAudit({ targetare, specs }) {
     { label: 'Capitaluri proprii', value: targetare?.capitaluri_proprii_ron, tone: 'text-slate-900' },
   ].filter((row) => typeof row.value === 'number');
 
-  const specRows = [
-    { label: 'Regim de înălțime', value: specs?.regim_inaltime },
-    { label: 'Structură de rezistență', value: specs?.structura_rezistenta },
-    { label: 'Închideri și pereți', value: specs?.inchideri_pereti },
-    { label: 'Termen de finalizare', value: specs?.termen_finalizare },
-  ].filter((row) => row.value);
-
   return (
     <section id="dezvoltator" className="card card-pad mb-6">
       <div className="card-head">
@@ -40,7 +54,13 @@ export default function DeveloperAudit({ targetare, specs }) {
             <Building2 className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="section-title">Due diligence dezvoltator &amp; constructor</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="section-title">Due diligence dezvoltator &amp; constructor</h3>
+              <ProvenanceBadge
+                provenance={!targetareUnavailable ? 'masurat' : 'anunt'}
+                detail={!targetareUnavailable ? 'Targetare.ro / ANAF' : 'Specificații anunț'}
+              />
+            </div>
             <p className="section-sub">
               Bonitate financiară, grad de îndatorare și risc de insolvență, din datele publice ale
               firmei — plus specificațiile tehnice ale construcției.

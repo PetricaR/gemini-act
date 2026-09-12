@@ -11,6 +11,7 @@ import {
 import { orderedCategories } from '../lib/categories.js';
 import { radiusToPercent, toPercent } from '../lib/mercator.js';
 import { distance, num, scoreTone, walkTime } from '../lib/format.js';
+import ProvenanceBadge from './ProvenanceBadge.jsx';
 
 /**
  * The property's 500 m walkable radius, drawn over a real Google base map.
@@ -79,9 +80,15 @@ export default function LocationMap({ locatie, adresa }) {
             <Compass className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="section-title">
-              Facilități în raza de {num(harta.raza_m)} m — hartă cartografiată
-            </h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="section-title">
+                Facilități în raza de {num(harta.raza_m)} m — hartă cartografiată
+              </h3>
+              <ProvenanceBadge
+                provenance="masurat"
+                detail="Google Places &amp; Routes"
+              />
+            </div>
             <p className="section-sub">
               {locatie.total_facilitati} puncte de interes reale, preluate din Google Places și
               poziționate pe hartă după coordonatele lor. Timpul de mers pentru cea mai apropiată
@@ -97,6 +104,7 @@ export default function LocationMap({ locatie, adresa }) {
               {locatie.scor_accesibilitate}
               <span className="text-xs font-semibold text-slate-500"> / 10</span>
             </div>
+            <div className="mt-0.5 text-[10px] text-slate-500">formulă internă ponderată</div>
           </div>
         )}
       </div>

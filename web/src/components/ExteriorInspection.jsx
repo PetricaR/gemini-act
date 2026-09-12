@@ -11,6 +11,8 @@ import {
   Zap,
 } from 'lucide-react';
 import { captureDate, scoreTone } from '../lib/format.js';
+import ProvenanceBadge from './ProvenanceBadge.jsx';
+import UnavailableBlock from './UnavailableBlock.jsx';
 
 /**
  * The exterior the seller did not photograph.
@@ -40,7 +42,17 @@ export default function ExteriorInspection({ audit, locatie, adresa }) {
   const tone = scoreTone(score);
   const hasImagery = angles.length > 0 || Boolean(aerial?.url);
 
-  if (!audit && !hasImagery) return null;
+  if ((audit?.status === 'indisponibil' || audit?.disponibil === false || !audit) && !hasImagery) {
+    return (
+      <section id="exterior" className="card card-pad mb-6">
+        <UnavailableBlock
+          title="Inspecție exterioară — Google Street View &amp; ortofotoplan"
+          reason={audit?.motiv || "Imaginile Street View sau aeriene nu sunt disponibile pentru această locație."}
+          provenance="indisponibil"
+        />
+      </section>
+    );
+  }
 
   return (
     <section id="exterior" className="card card-pad mb-6">
@@ -50,9 +62,15 @@ export default function ExteriorInspection({ audit, locatie, adresa }) {
             <Camera className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="section-title">
-              Inspecție exterioară — Google Street View 360° & ortofotoplan
-            </h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="section-title">
+                Inspecție exterioară — Google Street View 360° &amp; ortofotoplan
+              </h3>
+              <ProvenanceBadge
+                provenance="masurat"
+                detail="Google Street View &amp; Ortofoto"
+              />
+            </div>
             <p className="section-sub">
               Fotografii reale ale clădirii și ale străzii, pe patru direcții, plus imaginea aeriană
               a incintei. Sunt singurele imagini din raport pe care vânzătorul nu le controlează.

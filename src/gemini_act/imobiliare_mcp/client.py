@@ -49,7 +49,10 @@ class SearchResult:
     reply: str
     total_hits: int
     listings: list[dict[str, Any]]
-    explanations: dict[int, dict[str, str]]
+    # Keyed by the listing id as a *string*: hydrate has been seen returning
+    # `id` both as an int and as a string, and an int-keyed dict silently
+    # matches nothing in the second case.
+    explanations: dict[str, dict[str, str]]
     # Result tokens outlive the session that produced them, so keeping this
     # lets a caller page further into the same result set after the session
     # has expired -- no new query, no new session needed.
@@ -159,22 +162,25 @@ class ImobiliareClient:
         # Preserve AI ranking while dropping duplicates.
         return list(dict.fromkeys(ids))[:max_results], total
 
-    def _explanations(self, spec: dict[str, Any] | None) -> dict[int, dict[str, str]]:
+    def _explanations(self, spec: dict[str, Any] | None) -> dict[str, dict[str, str]]:
         """Fetch per-listing match reasoning. Best-effort: never fatal."""
         if not spec or not spec.get("url") or not spec.get("token"):
             return {}
         try:
             raw = self._post(spec["url"], {"token": spec["token"]})
-        except httpx.HTTPError:
+        # Match reasoning is a nicety; an expired session (SessionError) or a
+        # non-JSON body must not take down the search that already succeeded.
+        except (httpx.HTTPError, SessionError, ValueError):
             return {}
 
-        out: dict[int, dict[str, str]] = {}
+        out: dict[str, dict[str, str]] = {}
         for item in _as_list(raw):
             if not isinstance(item, dict):
                 continue
-            lid = item.get("listingId") or item.get("listing_id") or item.get("id")
+            raw_id = item.get("listingId") or item.get("listing_id") or item.get("id")
+            # int() first so "275969177" and 275969177 land on the same key.
             try:
-                lid = int(lid)
+                lid = str(int(raw_id))
             except (TypeError, ValueError):
                 continue
             entry = {}

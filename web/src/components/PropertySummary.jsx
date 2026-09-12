@@ -39,10 +39,15 @@ export default function PropertySummary({ data, pdfUrl }) {
   const pricePerSqm = surface > 0 ? Math.round(price / surface) : null;
 
   const valuation = data.evaluare_anevar || {};
-  const marketValue = valuation.valoare_estimata_piata ?? price;
-  const delta = priceDelta(price, marketValue, valuation.ajustare_recomandata_procent);
-  const margin = priceGap(price, marketValue, valuation.marja_negociere_eur);
-  const overpriced = delta > 0;
+  const isValuationAvailable =
+    valuation.status !== 'indisponibil' &&
+    valuation.disponibil !== false &&
+    valuation.valoare_estimata_piata != null &&
+    (valuation.comparabile_utilizate || []).length >= 3;
+  const marketValue = isValuationAvailable ? valuation.valoare_estimata_piata : null;
+  const delta = isValuationAvailable ? priceDelta(price, marketValue, valuation.ajustare_recomandata_procent) : null;
+  const margin = isValuationAvailable ? priceGap(price, marketValue, valuation.marja_negociere_eur) : null;
+  const overpriced = delta != null && delta > 0;
 
   return (
     <section id="sinteza" className="card card-pad mb-6">
@@ -136,30 +141,46 @@ export default function PropertySummary({ data, pdfUrl }) {
           <div className="stat-note">{pricePerSqm ? eurPerSqm(pricePerSqm) : '—'} util</div>
         </div>
 
-        <div className="stat border-sky-200 bg-sky-50/70">
-          <div className="label text-sky-700">Valoare de piață estimată</div>
-          <div className="stat-value text-sky-700">{eur(marketValue)}</div>
-          <div className="stat-note">
-            {valuation.pret_pe_mp_estimat ? eurPerSqm(valuation.pret_pe_mp_estimat) : 'GEV 630'}
+        {isValuationAvailable ? (
+          <div className="stat border-sky-200 bg-sky-50/70">
+            <div className="label text-sky-700">Valoare de piață estimată</div>
+            <div className="stat-value text-sky-700">{eur(marketValue)}</div>
+            <div className="stat-note">
+              {valuation.pret_pe_mp_estimat ? eurPerSqm(valuation.pret_pe_mp_estimat) : 'GEV 630'}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="stat border-slate-200 bg-slate-50/70">
+            <div className="label text-slate-500">Valoare de piață estimată</div>
+            <div className="stat-value text-base font-semibold text-slate-500">Indisponibil</div>
+            <div className="stat-note">&lt; 3 comparabile ANEVAR</div>
+          </div>
+        )}
 
-        <div className={`stat ${overpriced ? 'border-rose-200 bg-rose-50/70' : 'border-emerald-200 bg-emerald-50/70'}`}>
-          <div className="label">Ecart față de piață</div>
-          <div
-            className={`stat-value flex items-center gap-1 ${
-              overpriced ? 'text-rose-700' : 'text-emerald-700'
-            }`}
-          >
-            {overpriced ? (
-              <TrendingUp className="h-4 w-4" />
-            ) : (
-              <TrendingDown className="h-4 w-4" />
-            )}
-            {percent(delta, { signed: true })}
+        {isValuationAvailable ? (
+          <div className={`stat ${overpriced ? 'border-rose-200 bg-rose-50/70' : 'border-emerald-200 bg-emerald-50/70'}`}>
+            <div className="label">Ecart față de piață</div>
+            <div
+              className={`stat-value flex items-center gap-1 ${
+                overpriced ? 'text-rose-700' : 'text-emerald-700'
+              }`}
+            >
+              {overpriced ? (
+                <TrendingUp className="h-4 w-4" />
+              ) : (
+                <TrendingDown className="h-4 w-4" />
+              )}
+              {percent(delta, { signed: true })}
+            </div>
+            <div className="stat-note">marjă de negociere ~{eur(margin)}</div>
           </div>
-          <div className="stat-note">marjă de negociere ~{eur(margin)}</div>
-        </div>
+        ) : (
+          <div className="stat border-slate-200 bg-slate-50/70">
+            <div className="label text-slate-500">Ecart față de piață</div>
+            <div className="stat-value text-base font-semibold text-slate-400">—</div>
+            <div className="stat-note">eșantion insuficient</div>
+          </div>
+        )}
 
         <div className="stat">
           <div className="label">Suprafață utilă</div>

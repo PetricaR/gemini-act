@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import unicodedata
 from typing import Any
 
 import httpx
@@ -149,6 +151,30 @@ def obtine_recenzii_place(place_id: str) -> dict[str, Any] | None:
     return None
 
 
+def _normalizeaza(text: str) -> str:
+    """Lowercase and strip diacritics, so keyword lists need only one spelling.
+
+    Reviews are written both ways ("întârziere" / "intarziere"); matching the
+    raw text meant half the keyword list could never fire.
+    """
+    lowered = (text or "").lower()
+    decomposed = unicodedata.normalize("NFKD", lowered)
+    folded = "".join(c for c in decomposed if not unicodedata.combining(c))
+    # Romanian ș/ț sometimes arrive as the pre-composed comma-below letters,
+    # which NFKD does not decompose on every platform.
+    return folded.replace("ș", "s").replace("ş", "s").replace("ț", "t").replace("ţ", "t")
+
+
+def _contine(text: str, *keywords: str) -> bool:
+    """Whole-word keyword match against already-normalised text.
+
+    Substring matching is wrong here: "apa" is inside "apartament", the most
+    common word in these reviews, and produced a water-damage red flag on
+    every positive review. Multi-word keywords match as phrases.
+    """
+    return any(re.search(rf"(?<!\w){re.escape(k)}(?!\w)", text) for k in keywords)
+
+
 def _analiza_reguli_fallback(date_recenzii: dict[str, Any]) -> dict[str, Any]:
     """Generare analiză pe bază de reguli dacă modelul LLM nu este disponibil."""
     rating = float(date_recenzii.get("rating_global") or 0.0)
@@ -156,26 +182,34 @@ def _analiza_reguli_fallback(date_recenzii: dict[str, Any]) -> dict[str, Any]:
     puncte_forte: list[str] = []
     probleme: list[str] = []
 
-    text_unificat = " ".join([r.get("text", "").lower() for r in recenzii])
+    text_unificat = _normalizeaza(" ".join(r.get("text", "") for r in recenzii))
 
-    # Detecție probleme comune
-    if any(k in text_unificat for k in ["intarziere", "întârziat", "termen", "amanat"]):
+    # Detecție probleme comune. Keywords are diacritic-free: the text is folded
+    # to match. Prefer specific stems over short ones that hide inside
+    # unrelated words.
+    if _contine(text_unificat, "intarziere", "intarzieri", "intarziat", "intarziata",
+                "amanat", "amanata", "depasit termenul", "peste termen"):
         probleme.append("Întârzieri raportate la finalizarea sau predarea proiectului")
-    if any(k in text_unificat for k in ["infiltratii", "infiltrații", "apa", "igrasie", "mucegai"]):
+    if _contine(text_unificat, "infiltratii", "infiltratie", "igrasie", "mucegai",
+                "hidroizolatie", "inundat", "scurgeri", "umezeala"):
         probleme.append("Probleme de hidroizolație, umezeală sau infiltrații semnalate")
-    if any(k in text_unificat for k in ["zgomot", "fonic", "pereti subtiri", "se aude"]):
+    if _contine(text_unificat, "zgomot", "zgomotos", "fonic", "fonica",
+                "pereti subtiri", "se aude"):
         probleme.append("Izolație fonică slabă între apartamente menționată de locatari")
-    if any(k in text_unificat for k in ["parcare", "locuri", "masini", "aglomerat"]):
+    if _contine(text_unificat, "parcare", "parcari", "locuri de parcare", "aglomerat"):
         probleme.append("Dificultăți legate de locurile de parcare sau aglomerația auto")
-    if any(k in text_unificat for k in ["comunicare", "greu de contactat", "arogant", "raspunde"]):
+    if _contine(text_unificat, "greu de contactat", "nu raspund", "nu raspunde",
+                "arogant", "aroganti", "comunicare proasta", "comunicare dificila"):
         probleme.append("Comunicare anevoioasă cu dezvoltatorul sau echipa post-vânzare")
 
     # Detecție aspecte pozitive
-    if any(k in text_unificat for k in ["serios", "profesionist", "recomand", "calitate"]):
+    if _contine(text_unificat, "serios", "seriosi", "profesionist", "profesionisti",
+                "recomand", "calitate"):
         puncte_forte.append("Apreciat pentru seriozitate și profesionalism")
-    if any(k in text_unificat for k in ["finisaje bune", "curat", "frumos", "design", "spatios"]):
+    if _contine(text_unificat, "finisaje bune", "finisaje de calitate", "curat",
+                "frumos", "design", "spatios"):
         puncte_forte.append("Finisaje de calitate și spații bine compartimentate")
-    if any(k in text_unificat for k in ["la timp", "fara intarziere", "punctual"]):
+    if _contine(text_unificat, "la timp", "fara intarziere", "punctual", "punctuali"):
         puncte_forte.append("Predare conform termenelor asumate")
 
     if not puncte_forte and rating >= 4.0:
@@ -188,7 +222,22 @@ def _analiza_reguli_fallback(date_recenzii: dict[str, Any]) -> dict[str, Any]:
     if not probleme:
         probleme.append("Nu există reclamații grave sau recurente în eșantionul curent")
 
-    scor = round(rating * 2.0, 1) if rating > 0 else 6.0
+    # No rating means no reputation measurement. A placeholder score would be
+    # rendered as if it had been read off Google Maps.
+    if rating <= 0:
+        return {
+            "status": "indisponibil",
+            "disponibil": False,
+            "provenienta": "indisponibil",
+            "motiv": "Locația nu are un rating Google Maps public din care să se derive un scor.",
+            "scor_reputatie": None,
+            "calificativ_reputatie": None,
+            "puncte_forte_apreciate": puncte_forte,
+            "probleme_reclamate_frecvent": probleme,
+            "recomandare_cumparator": None,
+        }
+
+    scor = round(rating * 2.0, 1)
     if scor >= 8.5:
         calificativ = "Excelentă"
         sfat = "Dezvoltatorul/complexul beneficiază de recenzii foarte favorabile."
@@ -203,6 +252,9 @@ def _analiza_reguli_fallback(date_recenzii: dict[str, Any]) -> dict[str, Any]:
         sfat = "Risc de disconfort post-vânzare; solicitați garanții contractuale ferme."
 
     return {
+        "status": "success",
+        "disponibil": True,
+        "provenienta": "reguli",
         "scor_reputatie": scor,
         "calificativ_reputatie": calificativ,
         "puncte_forte_apreciate": puncte_forte,
@@ -319,12 +371,21 @@ def recenzii_to_markdown(data: dict[str, Any]) -> str:
     linii.append("")
 
     if analiza:
-        scor = analiza.get("scor_reputatie", 7.0)
-        calificativ = analiza.get("calificativ_reputatie", "Bună")
-        linii.extend([
-            f"#### 🔍 Scor Reputație Comunitate: **{scor} / 10** ({calificativ})",
-            "",
-        ])
+        scor = analiza.get("scor_reputatie")
+        calificativ = analiza.get("calificativ_reputatie")
+        if scor is None:
+            linii.extend([
+                "#### 🔍 Scor Reputație Comunitate: indisponibil",
+                "",
+                "> ⚠️ " + (analiza.get("motiv")
+                           or "Nu există un rating public pentru această locație."),
+                "",
+            ])
+        else:
+            linii.extend([
+                f"#### 🔍 Scor Reputație Comunitate: **{scor} / 10** ({calificativ})",
+                "",
+            ])
 
         if analiza.get("puncte_forte_apreciate"):
             linii.append("**Puncte forte confirmate de locatari / cumpărători:**")

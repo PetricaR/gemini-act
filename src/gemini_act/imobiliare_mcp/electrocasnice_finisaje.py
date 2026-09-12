@@ -96,6 +96,13 @@ _SCHEMA: dict[str, Any] = {
                         "type": "string",
                         "description": "Infiltrație, montaj defectuos, tasare, uzură, condens",
                     },
+                    "in_fotografie": {
+                        "type": "string",
+                        "description": (
+                            "Numărul sau descrierea fotografiei în care este vizibil "
+                            "defectul (dovadă vizuală obligatorie)"
+                        ),
+                    },
                     "cost_estimat_remediere_eur": {
                         "type": "integer",
                         "description": "Cost estimativ în EUR",
@@ -133,7 +140,10 @@ _SCHEMA: dict[str, Any] = {
                     },
                     "certitudine_brand": {
                         "type": "string",
-                        "enum": ["sigur", "probabil", "estimat_dupa_design"],
+                        "enum": [
+                            "sigur", "probabil", "estimat_dupa_design",
+                            "mentionat_in_anunt", "nedeterminat",
+                        ],
                     },
                     "gama_brand": {
                         "type": "string",
@@ -197,6 +207,14 @@ _SCHEMA: dict[str, Any] = {
                 "impact_negociere_recomandat_eur",
                 "recomandare_evaluator",
             ],
+        },
+        "incredere": {
+            "type": "string",
+            "enum": ["ridicata", "medie", "scazuta"],
+            "description": (
+                "Nivel de încredere în analiza vizuală pe baza calității "
+                "și numărului de fotografii"
+            ),
         },
     },
     "required": [
@@ -310,7 +328,7 @@ def _analiza_reguli_fallback(subject: dict[str, Any]) -> dict[str, Any]:
                     "aparat": "Aparat / Echipament electrocasnic",
                     "camera": "Bucătărie / Climatizare",
                     "brand_detectat": nume_brand,
-                    "certitudine_brand": "sigur",
+                    "certitudine_brand": "mentionat_in_anunt",
                     "gama_brand": gama,
                     "tip_montaj": "incorporat",
                     "pret_estimat_nou_eur": pret_ref,
@@ -320,93 +338,54 @@ def _analiza_reguli_fallback(subject: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
-    if not electro:
-        electro = [
-            {
-                "aparat": "Cuptor și Plită",
-                "camera": "Bucătărie",
-                "brand_detectat": "Brand uzual (Bosch/Whirlpool)",
-                "certitudine_brand": "estimat_dupa_design",
-                "gama_brand": "Mid-range",
-                "tip_montaj": "incorporat",
-                "pret_estimat_nou_eur": 750,
-                "stare_uzura": "Bună / Ușoară uzură",
-                "valoare_piata_actuala_eur": 450,
-                "termen_cautare_online": "Cuptor si plita incorporabile",
-            },
-            {
-                "aparat": "Combină Frigorifică",
-                "camera": "Bucătărie",
-                "brand_detectat": "Samsung / LG / Beko",
-                "certitudine_brand": "estimat_dupa_design",
-                "gama_brand": "Mid-range",
-                "tip_montaj": "independent",
-                "pret_estimat_nou_eur": 650,
-                "stare_uzura": "Bună / Ușoară uzură",
-                "valoare_piata_actuala_eur": 380,
-                "termen_cautare_online": "Combina frigorifica No Frost",
-            },
-        ]
+    has_appliances = len(electro) > 0
+    concluzie_text = (
+        "Analiză bazată exclusiv pe descrierea text a anunțului (fără procesare fotografii). "
+        + ("Au fost identificate electrocasnice menționate în text. " if has_appliances
+           else "Nu au fost specificate electrocasnice în textul anunțului. ")
+        + "Se recomandă inspecție tehnică vizuală la fața locului."
+    )
 
     data = {
         "calitate_generala_finisaje": {
-            "scor_global": 8,
+            "scor_global": 7,
             "clasa": "mediu",
-            "stare_conservare": "Bună / Îngrijită",
-            "concluzie": (
-                "Apartamentul prezintă finisaje de nivel mediu spre premium, bine întreținute, "
-                "cu pardoseli calitative și instalații funcționale."
-            ),
+            "stare_conservare": "Neverificată vizual (doar descriere text)",
+            "concluzie": concluzie_text,
         },
         "categorii_finisaje": [
             {
-                "categorie": "Pardoseli",
-                "material_identificat": "Parchet laminat trafic intens și plăci ceramice",
-                "calitate": "mediu",
-                "scor": 8,
-                "stare_vizuala": "Fără zgârieturi adânci vizibile",
-                "observatii": "Montaj uniform cu plinte potrivite",
-            },
-            {
-                "categorie": "Tâmplărie ferestre",
-                "material_identificat": "Profil PVC cu geam termopan/tripan",
-                "calitate": "mediu",
-                "scor": 8,
-                "stare_vizuala": "Etanșă, feronerie funcțională",
-                "observatii": "Izolație fonică aparent adecvată",
-            },
-            {
-                "categorie": "Sanitare baie",
-                "material_identificat": "Cadă / cabină duș cu baterii monocomandă",
+                "categorie": "Finisaje generale",
+                "material_identificat": "Mențiuni sumare din descriere text",
                 "calitate": "mediu",
                 "scor": 7,
-                "stare_vizuala": "Curată, fără depuneri masive de calcar",
-                "observatii": "Recomandată reverificarea siliconului la cadă",
+                "stare_vizuala": "Neverificată prin imagini",
+                "observatii": "Necesită inspecție la vizionare",
             },
         ],
-        "defecte_si_probleme": [
-            {
-                "element_afectat": "Plinte și îmbinări pardoseală",
-                "descriere_defect": "Mici lufturi sau plinte ușor distanțate de perete pe alocuri",
-                "severitate": "Minor",
-                "cauza_probabila": "Tasare sau denivelare ușoară perete",
-                "cost_estimat_remediere_eur": 80,
-                "cost_estimat_remediere_ron": 400,
-            }
-        ],
+        "defecte_si_probleme": [],
         "electrocasnice": electro,
         "sumar_financiar": {
-            "total_valoare_nou_electrocasnice_eur": sum(e["pret_estimat_nou_eur"] for e in electro),
-            "total_valoare_actuala_electrocasnice_eur": sum(
-                e["valoare_piata_actuala_eur"] for e in electro
+            "total_valoare_nou_electrocasnice_eur": sum(
+                e.get("pret_estimat_nou_eur", 0) for e in electro
             ),
-            "total_buget_remediere_defecte_eur": 80,
-            "impact_negociere_recomandat_eur": 150,
+            "total_valoare_actuala_electrocasnice_eur": sum(
+                e.get("valoare_piata_actuala_eur", 0) for e in electro
+            ),
+            "total_buget_remediere_defecte_eur": 0,
+            "impact_negociere_recomandat_eur": 0,
             "recomandare_evaluator": (
-                "Electrocasnicele sunt în stare bună de funcționare și aduc valoare adăugată. "
-                "Defectele vizuale sunt minore și pot fi remediate cu un buget redus."
+                "Electrocasnicele identificate din textul anunțului necesită "
+                "verificare vizuală și probă funcțională la vizionare. "
+                "Nu au fost raportate defecte în descrierea text."
+                if has_appliances
+                else "Nu au fost specificate electrocasnice sau defecte în textul "
+                     "anunțului. Se impune inspecție vizuală detaliată."
             ),
         },
+        "incredere": "scazuta",
+        "mod_analiza": "fallback_fara_imagini",
+        "provenienta": "anunt",
     }
 
     return _completeaza_preturi_si_linkuri(data)
@@ -542,6 +521,30 @@ def electrocasnice_finisaje_to_markdown(
     return "\n".join(lines)
 
 
+def _audit_indisponibil(subject: dict[str, Any], mod: str, motiv: str) -> dict[str, Any]:
+    """A photo audit that did not happen.
+
+    The heuristic read of the listing text is still returned -- it is genuinely
+    useful -- but never as `status: "success"`, because the caller uses that to
+    decide whether it may present the result as an inspection of the photos.
+    See the tool contract in CLAUDE.md: never report a failed action as
+    successful.
+    """
+    fallback_data = _analiza_reguli_fallback(subject)
+    fallback_data["mod_analiza"] = mod
+    fallback_data["provenienta"] = "anunt"
+    fallback_data["incredere"] = "scazuta"
+    return {
+        "status": "indisponibil",
+        "disponibil": False,
+        "provenienta": "anunt",
+        "mod_analiza": mod,
+        "motiv": motiv,
+        "date_analiza": fallback_data,
+        "rezumat_markdown": electrocasnice_finisaje_to_markdown(fallback_data, subject),
+    }
+
+
 def analizeaza_electrocasnice_si_finisaje(
     subject: dict[str, Any],
     image_urls: list[str] | None = None,
@@ -555,58 +558,69 @@ def analizeaza_electrocasnice_si_finisaje(
 
     if not urls:
         logger.info("Anunțul nu are fotografii; se aplică analiza euristică fallback.")
-        fallback_data = _analiza_reguli_fallback(subject)
-        return {
-            "status": "success",
-            "mod_analiza": "fallback_fara_imagini",
-            "date_analiza": fallback_data,
-            "rezumat_markdown": electrocasnice_finisaje_to_markdown(fallback_data, subject),
-        }
+        return _audit_indisponibil(
+            subject, "fallback_fara_imagini",
+            "Anunțul nu conține fotografii care să poată fi auditate vizual.",
+        )
 
     photos = _download(urls, limit)
     if not photos:
         logger.warning("Descărcarea fotografiilor a eșuat; se aplică analiza euristică fallback.")
-        fallback_data = _analiza_reguli_fallback(subject)
-        return {
-            "status": "success",
-            "mod_analiza": "fallback_descarcare_esuata",
-            "date_analiza": fallback_data,
-            "rezumat_markdown": electrocasnice_finisaje_to_markdown(fallback_data, subject),
-        }
+        return _audit_indisponibil(
+            subject, "fallback_descarcare_esuata",
+            "Fotografiile anunțului nu au putut fi descărcate pentru analiză.",
+        )
 
     try:
         from google import genai
         from google.genai import types
     except ImportError:
         logger.warning("google-genai indisponibil; se aplică analiza euristică fallback.")
-        fallback_data = _analiza_reguli_fallback(subject)
-        return {
-            "status": "success",
-            "mod_analiza": "fallback_fara_genai",
-            "date_analiza": fallback_data,
-            "rezumat_markdown": electrocasnice_finisaje_to_markdown(fallback_data, subject),
-        }
+        return _audit_indisponibil(
+            subject, "fallback_fara_genai",
+            "Componenta de analiză vizuală (google-genai) nu este disponibilă.",
+        )
 
     facts = _facts(subject)
     prompt_text = (
         "Ești un expert evaluator imobiliar tehnic și specialist în finisaje interioare "
-        "și electrocasnice pe piața rezidențială din România.\n\n"
+        "și dotări pe piața rezidențială din România.\n\n"
         "Examinezi cu atenție fotografiile acestei proprietăți pentru a genera "
-        "un audit riguros pe trei axe principale:\n"
-        "1. RECUNOAȘTERE ELECTROCASNICE & BRANDURI: Identifică fiecare aparat vizibil "
-        "(plită, cuptor, hotă, frigider, mașină spălat, AC, TV, etc.). "
-        "Distinge brandul (Miele, Bosch, Samsung, Whirlpool, Electrolux, Beko, etc.) "
-        "dacă este vizibil logo-ul sau designul specific. "
-        "Clasifică gama (Economic/Mid-range/Premium/Ultra-Lux), "
-        "estimează prețul de nou pe piața din România (EUR și RON), "
-        "gradul de uzură și valoarea reziduală actuală.\n"
-        "2. AUDIT DEFECTE & PROBLEME FINISAJE: Caută proactiv orice vicii sau imperfecțiuni: "
-        "fisuri în tencuială/pereți/tavane, semne de infiltrații de apă sau igrasie, "
-        "plăci ceramice ciobite, parchet umflat sau distanțat, plinte lipsă sau dezlipite, "
-        "condens între foile de geam, rugină sau silicon mucegăit la baie, cabluri aparente. "
-        "Notează gravitatea (Minor/Moderat/Critic), cauza și costul estimat de remediere.\n"
-        "3. CALITATE FINISAJE & IMPACT FINANCIAR: Acordă note pe categorii de finisaje și "
-        "calculează totalul valoric al dotărilor și bugetul necesar de reparații.\n\n"
+        "un audit tehnic riguros și obiectiv pe trei axe principale:\n\n"
+        "1. RECUNOAȘTERE ELECTROCASNICE & BRANDURI:\n"
+        "- Identifică fiecare aparat vizibil (plită, cuptor, hotă, frigider, "
+        "mașină de spălat, AC, TV etc.).\n"
+        "- Identifică brandul DOAR dacă logo-ul sau inscripția este vizibilă pe "
+        "aparat (marchează 'sigur' sau 'probabil'). "
+        "Dacă logo-ul nu este clar lizibil, setează certitudine_brand: "
+        "'nedeterminat' sau 'estimat_dupa_design'.\n"
+        "- REGULĂ DE ABȚINERE LA SERII / MODELE: NU deduce și NU inventa serii "
+        "de produs din memorie sau design "
+        "(de exemplu, NU inventa serii precum 'RS68A8840B1' dacă seria nu este "
+        "direct lizibilă pe aparat). "
+        "Dacă seria nu se poate citi cu claritate, lasă denumirea generică "
+        "(ex: 'Plită inducție', 'Cuptor încorporabil').\n"
+        "- Clasifică gama (Economic/Mid-range/Premium/Ultra-Lux) și starea vizuală de uzură.\n"
+        "- Prețurile de magazin sunt orientative, bazate pe categoria "
+        "aparatului pe piața din România.\n\n"
+        "2. AUDIT DEFECTE & PROBLEME FINISAJE:\n"
+        "- REGULĂ STRICTĂ DE ABȚINERE: Raportează defecte DOAR dacă sunt cert "
+        "și neîndoielnic vizibile în imagini "
+        "(ex: fisură structurală vizibilă, infiltrație certă de apă, faianță "
+        "spartă, parchet umflat/deteriorat vizibil). "
+        "Dacă nu observi defecte evidente în fotografiile furnizate, lasă lista "
+        "'defecte_si_probleme' COMPLET GOALĂ ([]). "
+        "NU presupune, nu căuta 'proactiv' vicii inexistente și nu inventa probleme.\n"
+        "- PENTRU FIECARE DEFECT RAPORTAT, indică obligatoriu în câmpul "
+        "'in_fotografie' fotografia exactă unde este vizibil "
+        "(ex: 'Foto 2 - bucătărie', 'Foto 4 - baie sub chiuvetă').\n\n"
+        "3. CALITATE FINISAJE & EVALUARE ÎNCREDERE:\n"
+        "- Evaluează categoriile de finisaje vizibile (Pardoseli, Tâmplărie "
+        "ferestre, Pereți și tencuieli, Sanitare baie).\n"
+        "- Specifică nivelul de încredere global în câmpul 'incredere' "
+        "('ridicata', 'medie', 'scazuta') "
+        "pe baza numărului și relevanței fotografiilor (setează 'scazuta' dacă "
+        "sunt sub 5 poze utile sau sunt randări 3D).\n\n"
         f"Date tehnice cunoscute:\n{facts}\n"
     )
 
@@ -640,12 +654,31 @@ def analizeaza_electrocasnice_si_finisaje(
             text = "\n".join(lines).strip()
         parsed = json.loads(text) if text else {}
         date_finale = _completeaza_preturi_si_linkuri(parsed)
+        date_finale["mod_analiza"] = "gemini_vision"
+        date_finale["provenienta"] = "model"
+        if not date_finale.get("incredere"):
+            # The prompt's own rule: 3D renders or fewer than 5 useful photos
+            # mean low confidence. Photo *count* alone cannot establish a high
+            # one -- when the model declined to say, the honest answer is the
+            # cautious one, not a badge the evidence does not support.
+            date_finale["incredere"] = "medie" if len(photos) >= 5 else "scazuta"
     except Exception as exc:
         logger.exception("Eroare la analiza electrocasnicelor și finisajelor pe %s: %s", model, exc)
         fallback_data = _analiza_reguli_fallback(subject)
+        fallback_data["mod_analiza"] = "fallback_eroare_gemini"
+        fallback_data["provenienta"] = "anunt"
+        fallback_data["incredere"] = "scazuta"
+        # The vision audit did not happen. Reporting "success" here makes the
+        # caller present keyword-matching over the listing text as if it were
+        # an inspection of the photographs -- see the tool contract in
+        # CLAUDE.md: never report a failed action as successful.
         return {
-            "status": "success",
+            "status": "error",
+            "disponibil": False,
+            "provenienta": "anunt",
             "mod_analiza": "fallback_eroare_gemini",
+            "motiv": f"Analiza vizuală nu a putut fi efectuată: {exc}",
+            "error_message": f"Analiza vizuală nu a putut fi efectuată: {exc}",
             "date_analiza": fallback_data,
             "rezumat_markdown": electrocasnice_finisaje_to_markdown(fallback_data, subject),
         }
@@ -653,6 +686,7 @@ def analizeaza_electrocasnice_si_finisaje(
     return {
         "status": "success",
         "mod_analiza": "gemini_vision",
+        "provenienta": "model",
         "fotografii_analizate": len(photos),
         "total_fotografii": len(urls),
         "date_analiza": date_finale,

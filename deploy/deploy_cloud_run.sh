@@ -79,16 +79,8 @@ gcloud run deploy "${SERVICE}" \
 # form, but the canonical one is what the console and `gcloud run deploy` show —
 # and the OAuth redirect URI, the Chat endpoint and CHAT_AUDIENCE must all agree
 # on a single hostname, so pick the canonical one deterministically.
-PROJECT_NUMBER="$(gcloud projects describe "${PROJECT}" --format='value(projectNumber)')"
 URL="$(gcloud run services describe "${SERVICE}" \
-  --project="${PROJECT}" --region="${REGION}" \
-  --format="value(metadata.annotations['run.googleapis.com/urls'])" \
-  | tr ',' '\n' | tr -d '[]"' | grep -F "${PROJECT_NUMBER}" | head -1)"
-# Fall back to status.url if the annotation is ever absent.
-if [ -z "${URL}" ]; then
-  URL="$(gcloud run services describe "${SERVICE}" \
-    --project="${PROJECT}" --region="${REGION}" --format='value(status.url)')"
-fi
+  --project="${PROJECT}" --region="${REGION}" --format='value(status.url)')"
 echo "==> Service URL: ${URL}"
 
 # Pass 2: bake in the URL-dependent settings.

@@ -1,6 +1,8 @@
 import React from 'react';
 import { AlertTriangle, CheckCircle2, Lightbulb, Star } from 'lucide-react';
 import { num } from '../lib/format.js';
+import ProvenanceBadge from './ProvenanceBadge.jsx';
+import UnavailableBlock from './UnavailableBlock.jsx';
 
 /**
  * What the people already living there say — the only source in this report
@@ -8,6 +10,18 @@ import { num } from '../lib/format.js';
  */
 export default function ReviewsSentiment({ reviews, complexName }) {
   if (!reviews) return null;
+
+  if (reviews.status === 'indisponibil' || reviews.disponibil === false) {
+    return (
+      <section id="recenzii" className="card card-pad mb-6">
+        <UnavailableBlock
+          title="Părerea rezidenților — recenzii Google Maps"
+          reason={reviews.motiv || "Nu au fost identificate recenzii Google Maps pentru acest imobil sau dezvoltator."}
+          provenance="indisponibil"
+        />
+      </section>
+    );
+  }
 
   const rating = reviews.rating_mediu ?? reviews.rating_global;
   const count = reviews.numar_recenzii ?? reviews.total_recenzii;
@@ -23,7 +37,13 @@ export default function ReviewsSentiment({ reviews, complexName }) {
             <Star className="h-5 w-5 fill-amber-400 text-amber-500" />
           </div>
           <div>
-            <h3 className="section-title">Părerea rezidenților — recenzii Google Maps</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="section-title">Părerea rezidenților — recenzii Google Maps</h3>
+              <ProvenanceBadge
+                provenance="masurat"
+                detail="Google Maps / Places"
+              />
+            </div>
             <p className="section-sub">
               Sinteză din comentariile publice ale locatarilor din {complexName || 'ansamblu'}.
             </p>

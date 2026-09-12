@@ -28,7 +28,10 @@ def test_generare_linkuri_cautare():
     assert "google.com/search?q=Cuptor" in link_google
 
 
-def test_analiza_reguli_fallback():
+def test_analiza_reguli_fallback_fara_branduri():
+    """Când nu există branduri specificate și nici imagini, sistemul NU
+    trebuie să inventeze electrocasnice sau defecte.
+    """
     subject = {
         "title": "Apartament 2 camere modern complet utilat",
         "rooms": 2,
@@ -38,15 +41,42 @@ def test_analiza_reguli_fallback():
     }
     res = analizeaza_electrocasnice_si_finisaje(subject, image_urls=[])
 
-    assert res["status"] == "success"
+    # No photos means no photo audit: the heuristic read of the listing text is
+    # still returned, but never as a success the caller could present as an
+    # inspection of the images.
+    assert res["status"] == "indisponibil"
+    assert res["disponibil"] is False
+    assert res["motiv"]
+    assert res["mod_analiza"] == "fallback_fara_imagini"
+    assert res["provenienta"] == "anunt"
     data = res["date_analiza"]
     assert "calitate_generala_finisaje" in data
-    assert len(data["categorii_finisaje"]) >= 3
+    assert data["incredere"] == "scazuta"
+    assert data["electrocasnice"] == []
+    assert data["defecte_si_probleme"] == []
 
+
+def test_analiza_reguli_fallback_cu_branduri_in_anunt():
+    """Dacă apar branduri în textul anunțului, certitudinea trebuie să fie
+    strict 'mentionat_in_anunt'.
+    """
+    subject = {
+        "title": "Apartament 2 camere modern complet utilat",
+        "rooms": 2,
+        "usable_surface": 55.0,
+        "price": 95000,
+        "description": "Bucătărie utilată cu electrocasnice Bosch și climatizare Daikin.",
+    }
+    res = analizeaza_electrocasnice_si_finisaje(subject, image_urls=[])
+
+    assert res["status"] == "indisponibil"
+    assert res["disponibil"] is False
+    assert res["provenienta"] == "anunt"
+    data = res["date_analiza"]
     electro = data["electrocasnice"]
-    assert len(electro) >= 2
+    assert len(electro) == 2
     for el in electro:
-        assert "aparat" in el
+        assert el["certitudine_brand"] == "mentionat_in_anunt"
         assert "link_cautare_emag" in el
         assert "pret_estimat_nou_ron" in el
         assert el["pret_estimat_nou_ron"] == int(el["pret_estimat_nou_eur"] * EUR_TO_RON_RATE)
@@ -55,7 +85,6 @@ def test_analiza_reguli_fallback():
     assert sumar["total_valoare_nou_electrocasnice_eur"] > 0
     assert sumar["total_valoare_actuala_electrocasnice_eur"] > 0
     assert "rezumat_markdown" in res
-    assert "Electrocasnice Identificate" in res["rezumat_markdown"]
 
 
 def test_electrocasnice_finisaje_to_markdown_formatting():

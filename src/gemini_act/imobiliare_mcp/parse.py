@@ -28,6 +28,9 @@ _FLOOR_TOTAL = re.compile(r"/\s*(\d+)")
 # ga4 uses these as "no value"; treat them as missing rather than as data.
 _GA4_NULLS = {"not applicable", "0", "", "none"}
 
+# "mansardă" has no real floor number; normalised to always sort as the top.
+_MANSARDA = 99
+
 
 def _ga4(listing: dict[str, Any]) -> dict[str, Any]:
     return (listing.get("tracking") or {}).get("ga4Item") or {}
@@ -76,7 +79,7 @@ def _floor(label: str | None) -> tuple[int | None, int | None]:
         elif m.group(3):
             floor = -1         # demisol
         elif m.group(4):
-            floor = 99         # mansardă -- always the top
+            floor = _MANSARDA  # mansardă -- always the top
     return floor, int(total.group(1)) if total else None
 
 
@@ -266,11 +269,20 @@ def filter_and_rank(
 
         if exact_location_only and not r["exact_location"]:
             return False
-        if exclude_ground_floor and r["floor"] is not None and r["floor"] <= 0:
+        # A listing whose floor is unpublished has not been shown to satisfy
+        # "not ground floor", so it fails the constraint like any other
+        # missing value does above -- see the invariant in CLAUDE.md.
+        if exclude_ground_floor and (r["floor"] is None or r["floor"] <= 0):
             return False
-        if exclude_top_floor and r["floor"] is not None and r["floors_total"] is not None \
-                and r["floor"] >= r["floors_total"]:
-            return False
+        if exclude_top_floor:
+            floor, total = r["floor"], r["floors_total"]
+            if floor is None:
+                return False
+            # Mansardă normalises to 99: the top, whatever the building height.
+            if floor == _MANSARDA or (total is not None and floor >= total):
+                return False
+            if total is None:
+                return False
         return True
 
     kept = [r for r in records if keep(r)]

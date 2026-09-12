@@ -1119,32 +1119,51 @@ def extract_developer_and_constructor_info(
     except Exception as err:
         logger.debug("Eroare analyse_construction_materials: %s", err)
 
-    txt_lower = combined_text.lower()
-    dev_name = dev_info.get("dezvoltator") or "Habitat Group Estate"
-    const_name = dev_info.get("constructor") or "Habitat Construct & Development"
-
-    if "habitat" in txt_lower:
-        dev_name = "Habitat Group Estate"
-        const_name = "Habitat Construct & Development"
-    elif "one united" in txt_lower:
-        dev_name = "One United Properties"
-        const_name = "Bog'Art / One Construction"
+    # Only what was actually read out of the listing. Every field here used to
+    # carry a fabricated default -- an invented developer name ("Habitat Group
+    # Estate"), concrete class, brick type, joinery brand, energy class and
+    # completion year -- for properties where none of it was known. The
+    # developer name is the worst of them: the caller feeds it straight into
+    # the Targetare solvency lookup and the Google reviews query, so an
+    # invented company produced a real-looking due diligence section about a
+    # firm with no connection to the property.
+    dev_name = dev_info.get("dezvoltator") or None
+    const_name = dev_info.get("constructor") or None
 
     analiza = {
         "dezvoltator": dev_name,
         "constructor": const_name,
-        "regim_inaltime": mat_info.get("regim_inaltime") or "S + P + 3E (Bloc Boutique)",
-        "structura_rezistenta": mat_info.get("structura_rezistenta") or "Cadre și diafragme din beton armat C25/30, radier antiseismic",
-        "inchideri_pereti": mat_info.get("inchideri_pereti") or "Zidărie cărămidă Porotherm 25cm exterior, compartimentări interioare 11.5cm",
-        "zidarie": "Cărămidă termoizolantă Porotherm 25cm",
-        "termoizolatie": mat_info.get("termoizolatie") or "Polistiren expandat EPS 80 ignifugat 10cm + vată minerală bazaltică",
-        "tamplarie": mat_info.get("tamplarie") or "Tâmplărie PVC Salamander 6 camere cu tripan Low-E + 4 Seasons",
+        "regim_inaltime": mat_info.get("regim_inaltime"),
+        "structura_rezistenta": mat_info.get("structura_rezistenta"),
+        "inchideri_pereti": mat_info.get("inchideri_pereti"),
+        "zidarie": mat_info.get("zidarie"),
+        "termoizolatie": mat_info.get("termoizolatie"),
+        "tamplarie": mat_info.get("tamplarie"),
+        "certificare_verde": mat_info.get("certificare_verde"),
+        "termen_finalizare": mat_info.get("termen_finalizare"),
+        # Statutory, not property-specific: Law 10/1995 sets this for every
+        # building, so it is a fact rather than an assumption about this one.
         "garantie": "50 ani structură rezistență (Legea 10/1995) • 2 ani finisaje",
-        "certificare_verde": mat_info.get("certificare_verde") or "Clasa Energetică A & eficiență termică ridicată (nZEB ready)",
-        "termen_finalizare": "Anul 2025 (În curs de finalizare / recepție)",
     }
+    cunoscute = [k for k, v in analiza.items() if v and k != "garantie"]
+    if not cunoscute:
+        return {
+            "status": "indisponibil",
+            "disponibil": False,
+            "provenienta": "indisponibil",
+            "motiv": (
+                "Anunțul nu menționează dezvoltatorul, constructorul sau "
+                "specificațiile tehnice ale construcției."
+            ),
+            "analiza_dezvoltator": analiza,
+            "dezvoltator_detalii": dev_info,
+            "materiale_detalii": mat_info,
+        }
     return {
         "status": "success",
+        "disponibil": True,
+        "provenienta": "anunt",
+        "campuri_identificate": cunoscute,
         "analiza_dezvoltator": analiza,
         "dezvoltator_detalii": dev_info,
         "materiale_detalii": mat_info,

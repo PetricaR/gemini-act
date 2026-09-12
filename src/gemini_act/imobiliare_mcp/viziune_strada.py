@@ -17,7 +17,7 @@ from google import genai
 from google.genai import types
 
 from gemini_act.config import get_settings
-from gemini_act.imobiliare_mcp import maps
+from gemini_act.imobiliare_mcp import maps, paths
 
 logger = logging.getLogger(__name__)
 
@@ -321,8 +321,10 @@ def analyse_street_and_surroundings(
     model: str | None = None,
 ) -> dict[str, Any]:
     """Capturează imagini Google Street View multi-unghi și Satelit și le analizează cu Gemini."""
-    target_dir = Path(save_dir) if save_dir else Path.cwd()
-    target_dir.mkdir(parents=True, exist_ok=True)
+    # Not Path.cwd(): read-only on Cloud Run. A directory that cannot be
+    # created means the images are analysed but not kept, which is fine --
+    # `_salveaza` below skips writing when target_dir is None.
+    target_dir = paths.ensure_dir(Path(save_dir) if save_dir else paths.reports_dir())
 
     meta = maps.street_view_metadata(lat, lon)
     headings = (0, 90, 180, 270)
@@ -359,13 +361,12 @@ def analyse_street_and_surroundings(
 
     for h, raw_bytes in sv_angles.items():
         fname = f"streetview_{prefix}_h{h}.jpg"
-        fpath = target_dir / fname
-        try:
-            fpath.write_bytes(raw_bytes)
-            lbl = angle_labels.get(h, f"Street View {h}°")
-            images_info[lbl] = fname
-        except OSError:
-            logger.debug("Failed saving streetview image %s", fname, exc_info=True)
+        if target_dir is not None:
+            try:
+                (target_dir / fname).write_bytes(raw_bytes)
+                images_info[angle_labels.get(h, f"Street View {h}°")] = fname
+            except OSError:
+                logger.debug("Failed saving streetview image %s", fname, exc_info=True)
 
         lbl = angle_labels.get(h, f"Street View {h}°")
         parts.append(types.Part(text=f"Fotografie Google Street View — {lbl}:"))
@@ -373,12 +374,12 @@ def analyse_street_and_surroundings(
 
     if sat_img:
         sat_fname = f"satelit_{prefix}.png"
-        sat_path = target_dir / sat_fname
-        try:
-            sat_path.write_bytes(sat_img)
-            images_info["Vedere Aeriană Satelit"] = sat_fname
-        except OSError:
-            logger.debug("Failed saving satellite image %s", sat_fname, exc_info=True)
+        if target_dir is not None:
+            try:
+                (target_dir / sat_fname).write_bytes(sat_img)
+                images_info["Vedere Aeriană Satelit"] = sat_fname
+            except OSError:
+                logger.debug("Failed saving satellite image %s", sat_fname, exc_info=True)
 
         parts.append(
             types.Part(

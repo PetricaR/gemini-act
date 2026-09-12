@@ -232,6 +232,14 @@ class Correction:
     eur: float = 0.0
     basis: str = ""     # GEV 630 §58: how the adjustment was estimated
     note: str = ""
+    # True for a correction applied identically to every comparable to bring
+    # them all onto the same basis (asking -> probable transaction price),
+    # rather than one that measures how this comparable differs from the
+    # subject. GEV 630 §57's gross adjustment -- and the disqualification
+    # threshold built on it -- is about dissimilarity, so these are excluded
+    # from it; otherwise a universal 3-12% correction eats a third of the
+    # budget and long-listed comparables are disqualified for being listed.
+    normalisation: bool = False
 
 
 @dataclass
@@ -277,10 +285,13 @@ def adjust(subject: dict[str, Any], comp: dict[str, Any], p: Params, rates: Rate
             return rates.ground_floor.value
         return rates.top_floor.value if _is_top(rec) else 0.0
 
-    def metro_penalty(rec: dict[str, Any]) -> float:
+    def metro_penalty(rec: dict[str, Any]) -> float | None:
+        """None when the distance is unpublished -- GEV 630 §58 requires every
+        adjustment to show how it was estimated, and a guessed distance cannot.
+        """
         d = rec.get("metro_distance_m")
         if d is None:
-            return p.metro_discount_max_pct / 2
+            return None
         return min(d, 1500.0) / 1500.0 * p.metro_discount_max_pct
 
     # --- Condițiile de vânzare: asking price -> probable transaction price.
@@ -292,6 +303,7 @@ def adjust(subject: dict[str, Any], comp: dict[str, Any], p: Params, rates: Rate
               f"+ {p.negotiation_per_30_days_pct:.1f}%/30 zile de expunere, plafon "
               f"{p.negotiation_cap_pct:.1f}%",
         note=f"{why} → {margin:.1f}%",
+        normalisation=True,
     ))
 
     # --- Componente non-imobiliare și dotări, în sumă absolută.
@@ -332,7 +344,12 @@ def adjust(subject: dict[str, Any], comp: dict[str, Any], p: Params, rates: Rate
 
     pct_floor = floor_penalty(comp) - floor_penalty(subject)
     if abs(pct_floor) > 0.05:
-        src = (rates.ground_floor if (comp.get("floor") or 1) <= 0 else rates.top_floor)
+        # Cite the paired-data analysis the adjustment actually came from.
+        # `comp["floor"]` is 0 for parter, so test for None explicitly rather
+        # than leaning on truthiness.
+        comp_floor = comp.get("floor")
+        src = (rates.ground_floor if comp_floor is not None and comp_floor <= 0
+               else rates.top_floor)
         out.corrections.append(Correction(
             "Caracteristicile fizice", "Poziție pe verticală", pct=pct_floor,
             basis=src.source(), note="parter / ultim etaj față de etaje intermediare",
@@ -350,13 +367,23 @@ def adjust(subject: dict[str, Any], comp: dict[str, Any], p: Params, rates: Rate
                 note=f"{c_year} față de {s_year}",
             ))
 
-    pct_metro = metro_penalty(comp) - metro_penalty(subject)
-    if abs(pct_metro) > 0.05:
+    comp_metro, subj_metro = metro_penalty(comp), metro_penalty(subject)
+    if comp_metro is None or subj_metro is None:
+        # Recorded so the report shows the element was considered (GEV 630 §56
+        # requires all ten to be addressed), but with no adjustment applied.
+        cd, sd = comp.get("metro_distance_m"), subject.get("metro_distance_m")
+        out.corrections.append(Correction(
+            "Localizarea", "Distanță până la metrou", pct=0.0,
+            basis="fără ajustare: distanța nu este publicată pentru ambele proprietăți",
+            note=f"{cd if cd is not None else 'nepublicat'} m față de "
+                 f"{sd if sd is not None else 'nepublicat'} m",
+        ))
+    elif abs(pct_metro := comp_metro - subj_metro) > 0.05:
         cd, sd = comp.get("metro_distance_m"), subject.get("metro_distance_m")
         out.corrections.append(Correction(
             "Localizarea", "Distanță până la metrou", pct=pct_metro,
             basis=f"discount liniar până la {p.metro_discount_max_pct:.0f}% la 1.500 m (parametru)",
-            note=f"{cd if cd is not None else '?'} m față de {sd if sd is not None else '?'} m",
+            note=f"{cd:g} m față de {sd:g} m",
         ))
 
     if bool(subject.get("is_new_build")) != bool(comp.get("is_new_build")):
@@ -371,10 +398,18 @@ def adjust(subject: dict[str, Any], comp: dict[str, Any], p: Params, rates: Rate
     out.adjusted_per_sqm = out.base_per_sqm * (1 + total_pct / 100)
 
     # GEV 630 §57 requires gross and net, in both value and percentage terms.
-    out.n_adjustments = len(out.corrections)
-    pct_as_eur = sum(abs(c.pct) for c in out.corrections) / 100 * out.base_per_sqm * surface
-    out.gross_eur = sum(abs(c.eur) for c in out.corrections) + pct_as_eur
-    out.gross_pct = out.gross_eur / price * 100
+    # Gross measures comparability, so it covers only the corrections that
+    # describe a difference from the subject -- not the normalisation applied
+    # equally to every comparable -- and is expressed against the normalised
+    # price the percentages were actually applied to, not the asking price.
+    comparability = [c for c in out.corrections if not c.normalisation]
+    normalised_total = out.base_per_sqm * surface
+    out.n_adjustments = sum(1 for c in comparability if c.pct or c.eur)
+    pct_as_eur = sum(abs(c.pct) for c in comparability) / 100 * normalised_total
+    out.gross_eur = sum(abs(c.eur) for c in comparability) + pct_as_eur
+    out.gross_pct = out.gross_eur / normalised_total * 100 if normalised_total else 0.0
+    # Net stays against the asking price: it answers "what is this listing
+    # worth on the subject's terms, versus what it is advertised at".
     out.net_eur = out.adjusted_per_sqm * surface - price
     out.net_pct = out.net_eur / price * 100
     out.disqualified = out.gross_pct > p.disqualify_gross_pct
@@ -409,10 +444,13 @@ class Valuation:
     implied_yield: float | None = None
     final_value: float | None = None
     extrapolated: bool = False   # subject falls outside the comparables' size range
+    sufficient_comps: bool = True
 
     @property
     def reliability(self) -> str:
         """How much weight the conclusion can carry, given the evidence behind it."""
+        if len(self.comps) < 3:
+            return "insuficienta"
         if len(self.comps) < 4 or self.extrapolated:
             return "scazuta"
         if len(self.comps) < 7 or not self.rates.size_elasticity.derived:
@@ -470,7 +508,11 @@ def evaluate(subject: dict[str, Any], comp_records: list[dict[str, Any]],
     dropped = [g for g in graded if g.disqualified]
 
     v = Valuation(subject=subject, comps=kept, excluded=dropped, params=p, rates=rates)
-    v.market_per_sqm, v.market_value, v.best_comp_per_sqm, v.value_range = market_approach(subject, kept)
+    v.sufficient_comps = len(kept) >= 3
+    if v.sufficient_comps:
+        v.market_per_sqm, v.market_value, v.best_comp_per_sqm, v.value_range = market_approach(subject, kept)
+    else:
+        v.market_per_sqm, v.market_value, v.best_comp_per_sqm, v.value_range = None, None, None, None
     v.income = income_approach(subject, dedupe(rent_records), p)
 
     if v.income.rent_per_sqm and subject.get("price_per_sqm"):
@@ -485,11 +527,20 @@ def evaluate(subject: dict[str, Any], comp_records: list[dict[str, Any]],
         v.extrapolated = not (min(sizes) <= subj_sqm <= max(sizes))
 
     parts, weights = [], []
-    if v.market_value:
+    if v.sufficient_comps and v.market_value:
         parts.append(v.market_value)
         weights.append(p.market_weight_pct)
-    if v.income.value:
+    if v.sufficient_comps and v.income.value:
         parts.append(v.income.value)
         weights.append(p.income_weight_pct)
-    v.final_value = (sum(x * w for x, w in zip(parts, weights, strict=True)) / sum(weights)) if parts else None
+    # Weights are caller-supplied and each may legitimately be 0 (to run a
+    # single approach), but both being 0 leaves nothing to reconcile.
+    total_weight = sum(weights)
+    if parts and total_weight > 0:
+        v.final_value = sum(x * w for x, w in zip(parts, weights, strict=True)) / total_weight
+    elif parts:
+        # Both weights zero: fall back to an equal split rather than failing.
+        v.final_value = sum(parts) / len(parts)
+    else:
+        v.final_value = None
     return v

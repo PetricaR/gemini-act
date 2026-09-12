@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   AlertTriangle,
+  Camera,
   CheckCircle,
   ChevronDown,
   ChevronUp,
@@ -9,6 +10,8 @@ import {
   Wrench,
 } from 'lucide-react';
 import { eur, num, ron, scoreTone, severityTone } from '../lib/format.js';
+import ProvenanceBadge from './ProvenanceBadge.jsx';
+import UnavailableBlock from './UnavailableBlock.jsx';
 
 /**
  * What the vision pass found on the seller's own photographs, priced.
@@ -19,6 +22,18 @@ import { eur, num, ron, scoreTone, severityTone } from '../lib/format.js';
 export default function DefectsInspector({ audit }) {
   const [expanded, setExpanded] = useState(null);
   if (!audit) return null;
+
+  if (audit.status === 'indisponibil' || audit.disponibil === false) {
+    return (
+      <section id="defecte" className="card card-pad mb-6">
+        <UnavailableBlock
+          title="Defecte vizibile & calitatea finisajelor"
+          reason={audit.motiv || "Nu au fost furnizate fotografii suficiente pentru inspecția defectelor."}
+          provenance="indisponibil"
+        />
+      </section>
+    );
+  }
 
   const defects = audit.defecte_identificate || audit.defecte_si_probleme || [];
   const finishes = audit.categorii_finisaje || [];
@@ -44,7 +59,14 @@ export default function DefectsInspector({ audit }) {
             <ShieldAlert className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="section-title">Defecte vizibile &amp; calitatea finisajelor</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="section-title">Defecte vizibile &amp; calitatea finisajelor</h3>
+              <ProvenanceBadge
+                provenance={audit.provenienta || (audit.mod_analiza === 'gemini_vision' ? 'model' : 'anunt')}
+                confidence={audit.incredere}
+                detail={audit.mod_analiza === 'gemini_vision' ? 'Gemini Vision' : 'Text anunț'}
+              />
+            </div>
             <p className="section-sub">
               Inspecție fotografică automată. Un viciu care nu apare în nicio fotografie publicată nu
               poate fi detectat — lista de mai jos nu înlocuiește o expertiză tehnică la fața locului.
@@ -137,7 +159,14 @@ export default function DefectsInspector({ audit }) {
                       {defect.severitate || 'Minor'}
                     </span>
                     <div className="min-w-0">
-                      <div className="text-sm font-bold text-slate-900">{element}</div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-bold text-slate-900">{element}</span>
+                        {defect.in_fotografie && (
+                          <span className="pill text-[10px] bg-slate-100 text-slate-600 border-slate-200">
+                            Foto: {defect.in_fotografie}
+                          </span>
+                        )}
+                      </div>
                       <div className="truncate text-xs text-slate-500">{description}</div>
                     </div>
                   </div>

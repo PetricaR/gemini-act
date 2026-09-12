@@ -1,6 +1,8 @@
 import React from 'react';
 import { ArrowUpRight, ShoppingBag } from 'lucide-react';
 import { eur, ron } from '../lib/format.js';
+import ProvenanceBadge from './ProvenanceBadge.jsx';
+import UnavailableBlock from './UnavailableBlock.jsx';
 
 /**
  * The appliance package, recognised from the listing photos and priced twice:
@@ -12,6 +14,18 @@ import { eur, ron } from '../lib/format.js';
  */
 export default function AppliancesCatalog({ audit }) {
   if (!audit) return null;
+
+  if (audit.status === 'indisponibil' || audit.disponibil === false) {
+    return (
+      <section id="dotari" className="card card-pad mb-6">
+        <UnavailableBlock
+          title="Electrocasnice & dotări incluse"
+          reason={audit.motiv || "Nu au fost furnizate fotografii sau specificații suficiente pentru analiza electrocasnicelor."}
+          provenance="indisponibil"
+        />
+      </section>
+    );
+  }
 
   const appliances = audit.electrocasnice || [];
   const financial = audit.sumar_financiar || {};
@@ -30,6 +44,20 @@ export default function AppliancesCatalog({ audit }) {
     return 'bg-slate-50 text-slate-600 border-slate-200';
   };
 
+  const brandCertaintyLabel = (certainty) => {
+    switch (certainty) {
+      case 'sigur':
+        return { label: 'Logo / serie vizibilă', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+      case 'mentionat_in_anunt':
+        return { label: 'Menționat în text anunț', cls: 'bg-amber-50 text-amber-700 border-amber-200' };
+      case 'probabil':
+      case 'estimat_dupa_design':
+        return { label: 'Estimat după design', cls: 'bg-purple-50 text-purple-700 border-purple-200' };
+      default:
+        return { label: 'Brand nespecificat', cls: 'bg-slate-50 text-slate-500 border-slate-200' };
+    }
+  };
+
   return (
     <section id="dotari" className="card card-pad mb-6">
       <div className="card-head">
@@ -38,9 +66,16 @@ export default function AppliancesCatalog({ audit }) {
             <ShoppingBag className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="section-title">Electrocasnice &amp; dotări incluse în preț</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="section-title">Electrocasnice &amp; dotări incluse în preț</h3>
+              <ProvenanceBadge
+                provenance={audit.provenienta || (audit.mod_analiza === 'gemini_vision' ? 'model' : 'anunt')}
+                confidence={audit.incredere}
+                detail={audit.mod_analiza === 'gemini_vision' ? 'Gemini Vision' : 'Text anunț'}
+              />
+            </div>
             <p className="section-sub">
-              Brandul și seria sunt recunoscute din fotografii, iar valoarea este estimată față de
+              Brandul și seria sunt recunoscute din fotografii sau mențiunile din anunț, iar valoarea este estimată față de
               prețurile curente din retailul online.
             </p>
           </div>
@@ -101,13 +136,20 @@ export default function AppliancesCatalog({ audit }) {
                            transition-colors hover:border-slate-300"
               >
                 <div>
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <span className="pill border-slate-200 bg-slate-50 text-slate-500">
-                      {item.camera || 'Locuință'}
-                    </span>
-                    <span className={`pill ${tierClass(item.clasa_pret)}`}>
-                      {item.clasa_pret || 'Standard'}
-                    </span>
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="pill border-slate-200 bg-slate-50 text-slate-500">
+                        {item.camera || 'Locuință'}
+                      </span>
+                      <span className={`pill ${tierClass(item.clasa_pret)}`}>
+                        {item.clasa_pret || 'Standard'}
+                      </span>
+                    </div>
+                    {item.certitudine_brand && (
+                      <span className={`pill text-[10px] ${brandCertaintyLabel(item.certitudine_brand).cls}`}>
+                        {brandCertaintyLabel(item.certitudine_brand).label}
+                      </span>
+                    )}
                   </div>
 
                   <h4 className="text-sm font-bold tracking-tight text-slate-900">{name}</h4>

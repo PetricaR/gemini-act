@@ -26,9 +26,10 @@ from urllib.parse import quote
 
 import httpx
 
+from . import paths
+
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 OVERPASS = "https://overpass-api.de/api/interpreter"
-CACHE_DIR = Path.home() / ".cache" / "imobiliare-mcp" / "geo"
 CACHE_TTL = 30 * 24 * 3600  # streets and schools do not move
 
 # Nominatim's policy requires a real identifying User-Agent.
@@ -84,18 +85,31 @@ CATEGORIES: dict[str, tuple[str, list[str]]] = {
 }
 
 
-def _cache(key: str) -> Path:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+def _cache(key: str) -> Path | None:
+    """The cache file for `key`, or None when nothing here is writable."""
+    directory = paths.ensure_dir(paths.cache_dir("geo"))
+    if directory is None:
+        return None
     slug = "".join(c if c.isalnum() else "-" for c in key)[:120]
-    return CACHE_DIR / f"{slug}.json"
+    return directory / f"{slug}.json"
 
 
 def _cached_json(key: str, fetch) -> Any:
+    # These are free services asked the same questions repeatedly, so the cache
+    # matters -- but a read-only filesystem (Cloud Run) must degrade to an
+    # uncached lookup rather than fail the geocode.
     path = _cache(key)
-    if path.exists() and time.time() - path.stat().st_mtime < CACHE_TTL:
-        return json.loads(path.read_text(encoding="utf-8"))
+    if path is not None and path.exists() and time.time() - path.stat().st_mtime < CACHE_TTL:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
     data = fetch()
-    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    if path is not None:
+        try:
+            path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
     return data
 
 

@@ -158,12 +158,45 @@ def extrage_info_apollo(raw_data: dict) -> dict | None:
 
 
 def analizeaza_sanatate_financiara(date_firma: dict) -> dict[str, Any]:
-    """Evaluează sănătatea financiară, solvabilitatea și riscul de insolvență."""
-    ca = date_firma.get("cifra_afaceri") or 0
-    profit = date_firma.get("profit_net") or 0
-    datorii = date_firma.get("datorii") or 0
-    angajati = date_firma.get("angajati") or 0
-    capitaluri = date_firma.get("capitaluri_proprii") or 0
+    """Evaluează sănătatea financiară, solvabilitatea și riscul de insolvență.
+
+    A company with no published financials scores nothing at all: absence of
+    data is not evidence of health, and the caller must render it as
+    unavailable rather than as a mid-range score.
+    """
+    # `or 0` would collapse "not reported" into "reported as zero" -- the two
+    # mean opposite things here, so keep them distinct.
+    ca = date_firma.get("cifra_afaceri")
+    profit = date_firma.get("profit_net")
+    datorii = date_firma.get("datorii")
+    angajati = date_firma.get("angajati")
+    capitaluri = date_firma.get("capitaluri_proprii")
+
+    masurate = [v for v in (ca, profit, datorii, capitaluri) if v is not None]
+    if not masurate:
+        return {
+            "status": "indisponibil",
+            "disponibil": False,
+            "provenienta": "indisponibil",
+            "motiv": (
+                "Nu există date financiare publicate pentru această companie "
+                "(bilanț nedepus sau firmă nou înființată)."
+            ),
+            "scor_sanatate_financiara": None,
+            "nivel_risc_insolventa": None,
+            "marja_profit_procent": None,
+            "grad_indatorare_procent": None,
+            "este_spv_activ": None,
+            "puncte_forte": [],
+            "riscuri_semnalate": [],
+            "avertismente_risc": [],
+        }
+
+    ca = ca or 0
+    profit = profit or 0
+    datorii = datorii or 0
+    angajati = angajati or 0
+    capitaluri = capitaluri or 0
 
     marja_profit = round((profit / ca) * 100, 2) if ca > 0 else 0.0
     grad_indatorare = round((datorii / ca) * 100, 2) if ca > 0 else 0.0
@@ -235,6 +268,9 @@ def analizeaza_sanatate_financiara(date_firma: dict) -> dict[str, Any]:
         nivel_risc = "Ridicat (Atenție la avansuri și garanții de bună execuție)"
 
     return {
+        "status": "success",
+        "disponibil": True,
+        "provenienta": "masurat",
         "scor_sanatate_financiara": scor_final,
         "nivel_risc_insolventa": nivel_risc,
         "marja_profit_procent": marja_profit,
@@ -390,19 +426,30 @@ def targetare_to_markdown(data: dict[str, Any]) -> str:
 
     analiza = data.get("analiza_financiara", {})
     if analiza:
-        scor_val = analiza.get("scor_sanatate_financiara", 7.0)
-        risc_val = analiza.get("nivel_risc_insolventa", "Moderat")
-        marja_val = analiza.get("marja_profit_procent", 0)
-        grad_val = analiza.get("grad_indatorare_procent", 0)
+        scor_val = analiza.get("scor_sanatate_financiara")
+        risc_val = analiza.get("nivel_risc_insolventa")
+        marja_val = analiza.get("marja_profit_procent")
+        grad_val = analiza.get("grad_indatorare_procent")
         linii.extend([
             "#### 🛡️ Evaluare Solvabilitate & Risc Dezvoltator",
             "",
-            f"- **Scor Sănătate Financiară:** **{scor_val} / 10**",
-            f"- **Nivel Risc:** `{risc_val}`",
-            f"- **Marjă Profit Net:** {marja_val}%",
-            f"- **Grad de Îndatorare (Datorii / CA):** {grad_val}%",
-            "",
         ])
+        if scor_val is None:
+            # No published financials: say so. A placeholder score here reads
+            # as a measurement and is the one thing this section must not do.
+            linii.extend([
+                "> ⚠️ **Indisponibil.** " + (analiza.get("motiv")
+                                            or "Nu există date financiare publicate."),
+                "",
+            ])
+        else:
+            linii.extend([
+                f"- **Scor Sănătate Financiară:** **{scor_val} / 10**",
+                f"- **Nivel Risc:** `{risc_val}`",
+                f"- **Marjă Profit Net:** {marja_val}%",
+                f"- **Grad de Îndatorare (Datorii / CA):** {grad_val}%",
+                "",
+            ])
 
         if analiza.get("puncte_forte"):
             linii.append("**Puncte forte identificate:**")
