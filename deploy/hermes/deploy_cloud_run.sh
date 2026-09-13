@@ -12,10 +12,22 @@
 #     skills/, sessions/ and state.db. Cloud Run has no attachable disk, so
 #     that directory is a GCS bucket mounted via FUSE at /opt/data.
 #
-#   - state.db is SQLite. WAL mode needs mmap and POSIX locking that GCS FUSE
-#     does not provide, so config.yaml pins `database.journal_mode: delete`.
-#     That file is uploaded BEFORE first boot so the database is created in the
-#     right mode — an existing WAL database is never live-downgraded.
+#   - KNOWN LIMITATION, observed in production: state.db does NOT work on the
+#     GCS mount. SQLite needs POSIX file locking that GCS FUSE refuses outright
+#     with EPERM, so the gateway logs "SQLite session store unavailable,
+#     falling back to JSONL" and /api/sessions returns 500. The JSONL fallback
+#     does persist to the bucket, so sessions survive; what is lost is the
+#     session index and full-text search over history.
+#     `database.journal_mode: delete` in config.yaml is kept because it is
+#     correct for network mounts, but it is NOT sufficient to make SQLite work
+#     here. Only a POSIX filesystem fixes this — see README.md for the two
+#     real options (Filestore, or move to a GCE VM).
+#
+#   - /opt/data/logs is mounted as an in-memory volume, over the top of the GCS
+#     mount. s6-log calls fd_chmod on its log file, which GCS FUSE also refuses
+#     with EPERM, putting s6-log into a fatal respawn loop roughly twice a
+#     second for the life of the container. Logs do not need to persist —
+#     Cloud Run captures stdout regardless — so tmpfs is the right answer.
 #
 #   - min=max=1 is a correctness constraint, not tuning. From Hermes' own docs:
 #     "Never run two Hermes gateway containers against the same data directory
