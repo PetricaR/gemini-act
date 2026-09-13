@@ -19,6 +19,39 @@ set -euo pipefail
 
 DSH_PORT="${DSH_PORT:-3080}"
 DSH_LOG=/tmp/dsh-boot.log
+DSH_HOME="${DSH_HOME:-/opt/dsh}"
+SEED_DIR="${DSH_SEED_DIR:-/opt/seed}"
+
+# Only these persist. Everything else under DSH_HOME — sessions, attachments,
+# storages — stays on the container filesystem because the GCS mount cannot
+# support it: link() returns ENOSYS there, which is what breaks session writes.
+SEEDED_FILES=(.credentials.yaml settings.yaml cordis.patch.yml)
+
+restore_seed() {
+  local f
+  for f in "${SEEDED_FILES[@]}"; do
+    if [[ -f "${SEED_DIR}/${f}" ]]; then
+      cp "${SEED_DIR}/${f}" "${DSH_HOME}/${f}" 2>/dev/null || true
+      echo "[entrypoint] restored ${f}"
+    fi
+  done
+  # Now on a real filesystem, so this actually takes effect — dsh refuses to
+  # boot unless .credentials.yaml is owner-only.
+  [[ -f "${DSH_HOME}/.credentials.yaml" ]] && chmod 600 "${DSH_HOME}/.credentials.yaml"
+  chmod 700 "${DSH_HOME}" 2>/dev/null || true
+  return 0
+}
+
+persist_seed() {
+  local f
+  for f in "${SEEDED_FILES[@]}"; do
+    [[ -f "${DSH_HOME}/${f}" ]] && cp "${DSH_HOME}/${f}" "${SEED_DIR}/${f}" 2>/dev/null || true
+  done
+  return 0
+}
+
+mkdir -p "${DSH_HOME}"
+restore_seed
 
 # Every /api request passes a Host/Origin fence
 # (packages/client/connection/src/api-request-trust.ts) that only admits
@@ -44,7 +77,13 @@ dsh web --host 127.0.0.1 --port "${DSH_PORT}" --no-open \
   ${TRUST_ARGS[@]+"${TRUST_ARGS[@]}"} > >(tee "${DSH_LOG}") 2>&1 &
 DSH_PID=$!
 
-trap 'kill -TERM "${DSH_PID}" 2>/dev/null || true' TERM INT
+# Copy config back before dying so anything changed in the UI survives. Cloud
+# Run sends SIGTERM with a short grace period; three small files fit easily.
+trap 'persist_seed; kill -TERM "${DSH_PID}" 2>/dev/null || true' TERM INT
+
+# SIGKILL leaves no chance to run the trap, so also persist periodically.
+# Cheap: three file copies, and only when they differ.
+( while sleep 30; do persist_seed; done ) &
 
 echo "[entrypoint] waiting for dsh to listen"
 for _i in $(seq 1 120); do
@@ -77,14 +116,13 @@ for _i in $(seq 1 30); do
 done
 
 if [[ -z "${TOKEN}" ]]; then
-  # Not fatal: the UI still works if the operator supplies ?token= by hand.
-  echo "[entrypoint] WARNING: no launch token found; auto-login disabled" >&2
-  sed -i 's|__DSH_AUTOLOGIN_QS__||' /etc/nginx/nginx.conf
+  echo "[entrypoint] WARNING: no launch token found in dsh output" >&2
 else
-  echo "[entrypoint] auto-login enabled (token length ${#TOKEN})"
-  # Becomes the query string on the upstream URI, so "/" is proxied as
-  # "/?token=...". An internal rewrite, not a browser redirect — see nginx.conf.
-  sed -i "s|__DSH_AUTOLOGIN_QS__|?token=${TOKEN}|" /etc/nginx/nginx.conf
+  # Print the sign-in URL against the public hostname so it can be opened
+  # directly. dsh prints it against 127.0.0.1, which is not reachable from a
+  # browser here. Log-only: nginx no longer injects the token (see nginx.conf).
+  _public="${DSH_TRUSTED_HOSTS%%,*}"
+  echo "[entrypoint] sign-in URL: https://${_public}/?token=${TOKEN}"
 fi
 
 echo "[entrypoint] starting nginx on 0.0.0.0:8080"

@@ -76,9 +76,17 @@ gcloud storage buckets describe "gs://${BUCKET}" --project="${PROJECT}" >/dev/nu
 
 # Seeded before first boot so the MCP server is registered on the very first
 # run. dsh applies the home-level patch after each profile's own patch layer.
-echo "==> seeding cordis.patch.yml (registers the imobiliare MCP server)"
+echo "==> seeding config (MCP server registration + Gemini provider)"
 gcloud storage cp "${SCRIPT_DIR}/cordis.patch.yml" \
   "gs://${BUCKET}/cordis.patch.yml" --project="${PROJECT}"
+# settings.yaml is seeded only if absent, so provider edits made in the UI (and
+# persisted back by entrypoint.sh) are not overwritten by the next deploy.
+if ! gcloud storage ls "gs://${BUCKET}/settings.yaml" --project="${PROJECT}" >/dev/null 2>&1; then
+  gcloud storage cp "${SCRIPT_DIR}/settings.yaml" \
+    "gs://${BUCKET}/settings.yaml" --project="${PROJECT}"
+else
+  echo "    settings.yaml already present; leaving it alone"
+fi
 
 echo "==> artifact registry repo"
 gcloud artifacts repositories describe "${REPO}" \
@@ -114,11 +122,11 @@ for _secret in dsh-gemini-key dsh-maps-key dsh-targetare-key; do
 done
 
 echo "==> deploying"
-# On the volume's mount-options below: these are not tuning. GCS FUSE
-# synthesizes POSIX modes from mount flags (the objects carry no real mode) and
-# defaults to file-mode=666. dsh then refuses to boot, because credentials-local
-# asserts .credentials.yaml is owner-only and cannot chmod it — GCS FUSE rejects
-# chmod outright. uid/gid=0 match the container user so ownership agrees too.
+# The bucket is mounted at /opt/seed, NOT as DSH_HOME. dsh needs a real
+# filesystem: session persistence and the attachment store publish files with
+# link(), and GCS FUSE answers ENOSYS to hard links. entrypoint.sh copies the
+# handful of config files between /opt/seed and DSH_HOME instead, so the Gemini
+# credentials and the MCP registration survive restarts while sessions do not.
 gcloud run deploy "${SERVICE}" \
   --image="${IMAGE}" \
   --region="${REGION}" \
@@ -132,7 +140,7 @@ gcloud run deploy "${SERVICE}" \
   --timeout=3600 \
   --port=8080 \
   --add-volume="name=data,type=cloud-storage,bucket=${BUCKET},mount-options=uid=0;gid=0;file-mode=600;dir-mode=700" \
-  --add-volume-mount=volume=data,mount-path=/opt/data \
+  --add-volume-mount=volume=data,mount-path=/opt/seed \
   --set-secrets=GEMINI_API_KEY=dsh-gemini-key:latest,GEMINI_ACT_MAPS_API_KEY=dsh-maps-key:latest,GEMINI_ACT_TARGETARE_API_KEY=dsh-targetare-key:latest \
   --set-env-vars="^@^GEMINI_ACT_IMOBILIARE_SESSION_ID=cloudrun@DSH_TRUSTED_HOSTS=${TRUSTED_HOSTS}"
 

@@ -39,18 +39,25 @@ RUN python3 -m venv /opt/venv \
     && ln -s /opt/venv/bin/imobiliare-mcp /usr/local/bin/imobiliare-mcp
 
 # ---- state -----------------------------------------------------------------
-# settings.yaml, .credentials.yaml, profiles/ and the generated PDF reports.
-# On Cloud Run this is a GCS bucket: safe here because dsh stores YAML and the
-# reports are whole-file writes — neither needs the POSIX locking GCS FUSE
-# refuses. (This is what made Hermes unworkable; see ../hermes/README.md.)
-ENV DSH_HOME=/opt/data
-RUN mkdir -p /opt/data
+# DSH_HOME is the container's REAL filesystem, deliberately NOT the GCS mount.
+# dsh needs POSIX semantics the mount cannot provide: session persistence and
+# the attachment store publish files with link()
+# (session-persistence-jsonl/src/index.ts:1137, attachment-local/src/store.ts)
+# and GCS FUSE answers ENOSYS to hard links, with no fallback path. It also
+# refuses chmod, which dsh requires on .credentials.yaml before it will boot.
+#
+# The bucket is mounted separately at /opt/seed and carries only the config
+# worth keeping. entrypoint.sh restores it into DSH_HOME at boot and copies it
+# back as it changes; sessions and attachments are deliberately ephemeral.
+ENV DSH_HOME=/opt/dsh
+ENV DSH_SEED_DIR=/opt/seed
+RUN mkdir -p /opt/dsh /opt/seed && chmod 700 /opt/dsh
 
 COPY deploy/dsh/nginx.conf /etc/nginx/nginx.conf
 COPY deploy/dsh/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-WORKDIR /opt/data
+WORKDIR /opt/dsh
 
 # 8080 is nginx. dsh itself listens on 3080 bound to loopback and is never
 # published — it is reachable only through nginx, which in turn is reachable
