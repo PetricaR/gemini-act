@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import statistics
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -27,7 +28,7 @@ except ImportError:  # pragma: no cover - depends on which SDK major is installe
     from mcp.server.fastmcp import FastMCP as MCPServer
 from pydantic import BaseModel, Field
 
-from . import comps, locatie, maps, paths, viziune
+from . import comps, costuri, locatie, maps, negociere, paths, viziune
 from .anevar import Params, evaluate, is_furnished
 from .client import ImobiliareClient, SessionError
 from .galerie import contact_sheet
@@ -602,6 +603,64 @@ def _comparabila_dict(c: Any) -> dict[str, Any]:
     }
 
 
+def _analiza_piata(area: str, pool: list[dict[str, Any]]) -> dict[str, Any]:
+    """The micro-market, measured from the active offers actually pulled.
+
+    Only what the pool can prove. A yearly price trend and a direction of
+    travel need a time series this pipeline does not keep, so they come back
+    `None` with the reason -- the dossier used to print an invented +6,2%/an
+    next to figures that were real.
+    """
+    unitare = [r["price_per_sqm"] for r in pool if r.get("price_per_sqm")]
+    zile = [r["days_on_market"] for r in pool if r.get("days_on_market") is not None]
+    if not unitare:
+        return {
+            "status": "indisponibil",
+            "disponibil": False,
+            "zona": area,
+            "motiv": "Nicio ofertă activă cu preț unitar publicat în această arie.",
+            "provenienta": "indisponibil",
+        }
+    return {
+        "status": "disponibil",
+        "disponibil": True,
+        "provenienta": "masurat",
+        "zona": area,
+        "pret_mediu_zona_eur_mp": round(statistics.median(unitare)),
+        "pret_minim_zona_eur_mp": round(min(unitare)),
+        "pret_maxim_zona_eur_mp": round(max(unitare)),
+        "oferta_activa_similara": len(pool),
+        "timp_mediu_expunere_luni": (
+            round(statistics.median(zile) / 30, 1) if zile else None
+        ),
+        "timp_mediu_expunere_zile": round(statistics.median(zile)) if zile else None,
+        # Not derivable from a single snapshot of active offers.
+        "variatie_anuala_procent": None,
+        "tendinta": None,
+        "motiv_tendinta": (
+            "Evoluția anuală și tendința cer o serie de timp; raportul se construiește "
+            "dintr-un singur instantaneu al ofertei active."
+        ),
+        "comentariu": (
+            f"{len(pool)} oferte active comparabile în aria '{area}', cu un preț unitar "
+            f"median de {round(statistics.median(unitare)):,} EUR/mp.".replace(",", ".")
+        ),
+    }
+
+
+def _constatari_vizuale(findings: Any) -> list[str]:
+    """Flatten what the vision pass saw into the phrases the levers match on."""
+    if findings is None:
+        return []
+    bucati: list[str] = []
+    for atribut in ("stare_generala", "finisaje", "observatii", "fatada_bloc"):
+        if valoare := getattr(findings, atribut, None):
+            bucati.append(str(valoare))
+    semne = getattr(findings, "semne_ingrijorare", None) or []
+    bucati.extend(str(x) for x in semne)
+    return bucati
+
+
 def _reports_dir() -> Path:
     """Where reports are staged. See `paths` for the Cloud Run constraints."""
     return paths.reports_dir()
@@ -700,6 +759,7 @@ def evaluare(
 
     usable = [r for r in sale_records if r.get("price_eur") and r.get("surface_sqm")]
     chosen = comps.rank_by_similarity(subject, usable)[:comparabile]
+    piata = _analiza_piata(area, usable)
     if len(chosen) < 3:
         return _evaluare_indisponibila(
             f"Eșantion insuficient: doar {len(chosen)} comparabile reale cu preț și "
@@ -775,6 +835,20 @@ def evaluare(
     sv_file = f"streetview-{listing_id}.jpg" if street_view else None
     map_file = f"harta-{listing_id}.png" if static_map else None
 
+    strategie = negociere.plan(
+        subject,
+        valuation.final_value,
+        constatari=_constatari_vizuale(findings),
+        deviz_renovare=(findings.cost_renovare_estimat_eur if findings else None),
+    )
+    buget = costuri.buget_consolidat(
+        subject.get("price_eur"),
+        subject.get("surface_sqm"),
+        subject.get("rooms"),
+        deviz_renovare_eur=(findings.cost_renovare_estimat_eur if findings else None),
+        prin_agentie=(subject.get("seller_type") == "agency"),
+    )
+
     markdown = render(
         valuation,
         comps_source=f"sitemap imobiliare.ro, aria '{area}', {len(usable)} oferte active cu preț și suprafață",
@@ -791,6 +865,8 @@ def evaluare(
         street_view_file=sv_file,
         static_map_file=map_file,
         scor_accesibilitate=scor_acces,
+        strategie=strategie,
+        buget=buget,
     )
     path.write_text(markdown, encoding="utf-8")
 
@@ -847,12 +923,111 @@ def evaluare(
             if vecinatati
             else None
         ),
+        "piata": piata,
+        "strategie_negociere": _strategie_pe_scurt(strategie),
+        "buget_consolidat": {
+            k: buget.get(k)
+            for k in ("status", "disponibil", "total_minim_eur", "total_maxim_eur",
+                      "total_estimat_eur", "costuri_conexe_eur")
+        },
         "fiabilitate": valuation.reliability,
         "extrapolare_suprafata": valuation.extrapolated,
         "comparabile_retinute": len(valuation.comps),
         "comparabile_excluse": len(valuation.excluded),
         "comparabile": [_comparabila_dict(c) for c in valuation.comps],
         "conformitate_sev": "nu se afirmă (SEV 106 §30.8)",
+    }
+
+
+@mcp.tool()
+def strategie_negociere(
+    identificator: Annotated[
+        str, Field(description="Listing id or full imobiliare.ro offer URL")
+    ],
+    buget_total_max: Annotated[
+        float | None,
+        Field(
+            description=(
+                "Total consolidated budget in EUR -- price, fees, renovation and furnishing "
+                "together. When given, it caps the walk-away threshold independently of what "
+                "the flat is worth."
+            )
+        ),
+    ] = None,
+    deviz_renovare: Annotated[
+        float | None,
+        Field(description="Known repair estimate in EUR; otherwise derived from the defects seen"),
+    ] = None,
+    prin_agentie: Annotated[
+        bool, Field(description="Whether an agency commission is payable by the buyer")
+    ] = False,
+    cu_viziune: Annotated[
+        bool,
+        Field(description="Look at the photos first, so the levers rest on observed defects"),
+    ] = True,
+) -> dict[str, Any]:
+    """Turn a valuation into an offer: the ladder, the counterparty and the walk-away.
+
+    Produces the five numbers a buyer needs before speaking to a seller --
+    opening offer, probable counter, target, ceiling and the price above which
+    the purchase is abandoned -- plus the seller archetype read from the
+    listing's own signals, the defects that justify a reduction in euros, the
+    checks that are due, and three paste-ready written offers.
+
+    The ranges are market practice for the Bucharest residential segment, not
+    measurements of this property, and each one says so. Nothing here changes
+    the estimated value: the valuation stays what `evaluare` computed.
+    """
+    ev = evaluare(identificator, cu_viziune=cu_viziune, cu_galerie=False, cu_localizare=False)
+    if ev.get("disponibil") is False or not ev.get("valoare_estimata_eur"):
+        return {
+            "status": "indisponibil",
+            "disponibil": False,
+            "motiv": ev.get("motiv")
+            or "Evaluarea nu a produs o valoare pe care să se calibreze o ofertă.",
+        }
+
+    listing_id = _resolve_id(identificator)
+    with _client() as client:
+        raw = client.hydrate([listing_id])
+    subject = normalise(raw[0]) if raw else {}
+
+    buget = costuri.buget_consolidat(
+        subject.get("price_eur"),
+        subject.get("surface_sqm"),
+        subject.get("rooms"),
+        deviz_renovare_eur=deviz_renovare or ev.get("cost_renovare_estimat_eur"),
+        prin_agentie=prin_agentie,
+    )
+    constatari = [
+        str(x)
+        for x in (
+            ev.get("stare_vizuala"),
+            ev.get("finisaje"),
+            ev.get("observatii_vizuale"),
+            *(ev.get("semne_ingrijorare") or []),
+        )
+        if x
+    ]
+
+    plan = negociere.plan(
+        subject,
+        ev.get("valoare_estimata_eur"),
+        constatari=constatari,
+        deviz_renovare=deviz_renovare or ev.get("cost_renovare_estimat_eur"),
+        buget_total_max=buget_total_max,
+        costuri_conexe=buget.get("costuri_conexe_eur"),
+    )
+    return {
+        "status": "success",
+        "id": listing_id,
+        "titlu": subject.get("title"),
+        "url": subject.get("url"),
+        "pret_cerut_eur": subject.get("price_eur"),
+        "valoare_estimata_eur": ev.get("valoare_estimata_eur"),
+        "fiabilitate_evaluare": ev.get("fiabilitate"),
+        "buget_consolidat": buget,
+        **plan,
     }
 
 
@@ -1202,6 +1377,252 @@ def analizeaza_electrocasnice_si_defecte_finisaje(
     )
 
 
+
+# The finishes audit reports defects as `defecte_si_probleme`, each an object
+# with `element_afectat` / `descriere_defect` -- not the flat list of strings the
+# levers first looked for, which meant no lever ever fired on a real listing.
+_CHEI_TEXT = ("concluzie", "observatii", "stare_generala", "rezumat", "stare_conservare")
+_CHEI_LISTE = ("defecte_si_probleme", "defecte_identificate", "semne_ingrijorare", "probleme")
+_CHEI_DEFECT = ("descriere_defect", "descriere", "element_afectat", "cauza_probabila")
+
+
+def _constatari_din_audit(*surse: dict[str, Any]) -> list[str]:
+    """Everything an audit said about condition, flattened into matchable phrases."""
+    constatari: list[str] = []
+    for sursa in surse:
+        if not isinstance(sursa, dict):
+            continue
+        calitate = sursa.get("calitate_generala_finisaje")
+        for bloc in (sursa, calitate if isinstance(calitate, dict) else {}):
+            for cheie in _CHEI_TEXT:
+                if valoare := bloc.get(cheie):
+                    constatari.append(str(valoare))
+        for cheie in _CHEI_LISTE:
+            for item in sursa.get(cheie) or []:
+                if isinstance(item, dict):
+                    constatari.extend(str(item[k]) for k in _CHEI_DEFECT if item.get(k))
+                else:
+                    constatari.append(str(item))
+    return constatari
+
+
+def _strategie_pe_scurt(plan: dict[str, Any]) -> dict[str, Any]:
+    """The ladder and the verdict, without the prose.
+
+    The full plan carries three draft offers and three checklists -- several KB
+    of text that belong in the report, not in the model's context on every
+    valuation. `strategie_negociere` returns all of it when it is actually
+    wanted.
+    """
+    if not plan.get("disponibil"):
+        return plan
+    profil = plan.get("profil_vanzator") or {}
+    return {
+        "status": plan.get("status"),
+        "disponibil": True,
+        "scara": plan.get("scara"),
+        "regula_decizionala": plan.get("regula_decizionala"),
+        "profil_vanzator": profil.get("profil"),
+        "semnale_vanzator": profil.get("semnale_detectate"),
+        "parghii": [x.get("problema") for x in plan.get("parghii") or []],
+        "verificari_impuse": [x.get("risc") for x in plan.get("steaguri_rosii") or []],
+        "detalii_complete": (
+            "Apelează strategie_negociere pentru scripturi, checklist-uri și argumentele "
+            "complete; raportul atașat le conține deja."
+        ),
+        "sursa": plan.get("sursa"),
+    }
+
+
+def _record_din_dosar(date: dict[str, Any]) -> dict[str, Any]:
+    """The handful of listing fields the strategy reads, recovered from a dossier."""
+    etaj = date.get("etaj")
+    numar_etaj = None
+    if isinstance(etaj, str) and (gasit := re.search(r"\d+", etaj)):
+        numar_etaj = int(gasit.group())
+    an = date.get("an_constructie")
+    return {
+        "price_eur": date.get("pret_total"),
+        "surface_sqm": date.get("suprafata_utila"),
+        "rooms": date.get("camere"),
+        "year_built": an,
+        "floor": numar_etaj,
+        "is_new_build": bool(an and an >= 2018),
+        "address_text": date.get("adresa"),
+        "seller_type": "developer" if date.get("dezvoltator") else None,
+    }
+
+
+def _completeaza_strategie(date: dict[str, Any], sub: dict[str, Any] | None) -> None:
+    """Fill the negotiation, cost and summary blocks of a dossier, in place.
+
+    Every block is best-effort and self-describing: when the evidence is not
+    there it is written as `status: "indisponibil"` with a reason, never left
+    absent for a renderer to paper over with a default.
+    """
+    ev = date.get("evaluare_anevar") or {}
+    evaluare_ok = ev.get("disponibil") is not False and ev.get("valoare_estimata_piata")
+    pret = date.get("pret_total")
+    suprafata = date.get("suprafata_utila")
+    camere = date.get("camere")
+    # The demo dossier has no normalised listing behind it. Reconstructing the
+    # few fields the strategy reads from the dossier itself is what keeps the
+    # sample report and a generated one structurally identical -- they used to
+    # diverge, and the sample was the only one that looked complete.
+    record = sub or _record_din_dosar(date)
+
+    nou = bool(record.get("is_new_build")) or (date.get("an_constructie") or 0) >= 2018
+
+    # -- Costuri ----------------------------------------------------------
+    if "costuri_tranzactionare" not in date:
+        date["costuri_tranzactionare"] = costuri.costuri_tranzactionare(
+            pret, prin_agentie=(record.get("seller_type") == "agency")
+        )
+    if "costuri_detinere" not in date:
+        date["costuri_detinere"] = costuri.costuri_detinere(suprafata, bloc_nou=nou)
+
+    deviz = None
+    audit = date.get("audit_electrocasnice_finisaje") or date.get("audit_electrocasnice") or {}
+    if isinstance(audit, dict):
+        sumar = audit.get("sumar_financiar") or {}
+        deviz = sumar.get("total_buget_remediere_defecte_eur") or audit.get(
+            "cost_renovare_estimat_eur"
+        )
+
+    if "buget_consolidat" not in date:
+        date["buget_consolidat"] = costuri.buget_consolidat(
+            pret, suprafata, camere, deviz_renovare_eur=deviz,
+            prin_agentie=(record.get("seller_type") == "agency"),
+        )
+
+    # -- Strategia de negociere -------------------------------------------
+    if "strategie_negociere" not in date:
+        constatari = _constatari_din_audit(audit, date.get("audit_exterior") or {})
+
+        sanatate = None
+        tgt = date.get("audit_targetare") or date.get("targetare_financiar") or {}
+        if isinstance(tgt, dict) and tgt.get("disponibil") is not False:
+            analiza = tgt.get("analiza_financiara") or {}
+            scor = analiza.get("scor_sanatate_financiara")
+            if scor is not None:
+                sanatate = float(scor) >= 5.0
+
+        conexe = (date.get("buget_consolidat") or {}).get("costuri_conexe_eur")
+        date["strategie_negociere"] = negociere.plan(
+            {**record, "price_eur": pret},
+            ev.get("valoare_estimata_piata") if evaluare_ok else None,
+            constatari=constatari,
+            deviz_renovare=deviz,
+            costuri_conexe=conexe,
+            dezvoltator_sanatos=sanatate,
+        )
+
+    # -- Riscuri: the red flags the evidence supports, not a generic list ---
+    strategie = date.get("strategie_negociere") or {}
+    if not date.get("riscuri") and strategie.get("steaguri_rosii"):
+        date["riscuri"] = strategie["steaguri_rosii"]
+
+    # -- Sinteza executivă --------------------------------------------------
+    if not date.get("rezumat_executiv"):
+        date["rezumat_executiv"] = _rezumat_executiv(date, strategie)
+    forte, slabe = _puncte_forte_slabe(date, strategie)
+    date.setdefault("puncte_forte", forte)
+    date.setdefault("puncte_slabe", slabe)
+
+    if not date.get("metodologie"):
+        date["metodologie"] = {
+            "abordare_principala": (
+                "Comparația directă a vânzărilor, cu ajustări regresate din setul de "
+                "comparabile (GEV 630 §54–58)."
+            ),
+            "abordare_secundara": (
+                "Capitalizarea directă a venitului net din chirii comparabile "
+                "(GEV 630 §59–71)."
+            ),
+            "sursa_comparabile": "Oferte active publicate pe imobiliare.ro, în aceeași arie.",
+            "strategie_negociere": (
+                "Scara de ofertare este calibrată pe practica de piață a segmentului "
+                "rezidențial bucureștean; este un parametru al modelului, nu o măsurătoare "
+                "a acestui imobil."
+            ),
+            "standard": "SEV 2025",
+        }
+    if not date.get("ipoteze_limitative"):
+        date["ipoteze_limitative"] = [
+            "Lucrarea NU este un raport de evaluare și nu se afirmă conformitatea cu SEV "
+            "(SEV 106 §30.8): nu există inspecție la fața locului, verificare a titlului sau "
+            "semnătura unui evaluator autorizat.",
+            "Comparabilele sunt oferte active, nu prețuri de tranzacționare; corecția de la "
+            "preț cerut la preț probabil este estimată, nu observată.",
+            "Suprafețele, anul construcției și dotările sunt cele declarate de vânzător.",
+            "Strategia de negociere este orientativă și nu constituie consultanță juridică.",
+        ]
+
+
+def _rezumat_executiv(date: dict[str, Any], strategie: dict[str, Any]) -> str:
+    """Two or three sentences that say only what the sections actually produced."""
+    ev = date.get("evaluare_anevar") or {}
+    titlu = date.get("titlu") or "Proprietatea analizată"
+    bucati = [f"{titlu}."]
+
+    if ev.get("disponibil") is not False and ev.get("valoare_estimata_piata"):
+        verdict = ev.get("verdict_piata") or ""
+        bucati.append(
+            f"Valoarea estimată prin comparație directă este de "
+            f"{ev['valoare_estimata_piata']:,.0f} EUR. {verdict}.".replace(",", ".")
+        )
+    else:
+        bucati.append(
+            "Evaluarea de piață nu a putut fi calculată: "
+            f"{ev.get('motiv') or 'eșantion de comparabile insuficient'}."
+        )
+
+    if strategie.get("disponibil"):
+        bucati.append(strategie.get("regula_decizionala", ""))
+
+    scor = date.get("scor_general")
+    if scor is not None:
+        bucati.append(
+            f"Scor global {scor}/10 ({date.get('calificativ_general')}), calculat din "
+            f"secțiunile care au produs o măsurătoare."
+        )
+    return " ".join(x for x in bucati if x)
+
+
+def _puncte_forte_slabe(
+    date: dict[str, Any], strategie: dict[str, Any]
+) -> tuple[list[str], list[str]]:
+    """Strengths and weaknesses, each traceable to a section that measured one."""
+    forte: list[str] = []
+    slabe: list[str] = []
+
+    ev = date.get("evaluare_anevar") or {}
+    ajustare = ev.get("ajustare_recomandata_procent")
+    if ajustare is not None:
+        if ajustare <= -3:
+            forte.append(f"Preț cerut sub valoarea estimată ({ajustare:+.1f}%).")
+        elif ajustare >= 5:
+            slabe.append(f"Preț cerut peste valoarea estimată ({ajustare:+.1f}%).")
+
+    loc = date.get("locatie") or {}
+    if loc.get("status") == "success":
+        facilitati = loc.get("facilitati") or loc.get("pois") or {}
+        if isinstance(facilitati, dict) and facilitati.get("metrou"):
+            forte.append("Stație de metrou în raza analizată.")
+
+    audit = date.get("audit_electrocasnice_finisaje") or date.get("audit_electrocasnice") or {}
+    calitate = (audit or {}).get("calitate_generala_finisaje") or {}
+    if (scor := calitate.get("scor_global")) is not None:
+        (forte if float(scor) >= 7 else slabe).append(
+            f"Finisaje evaluate la {scor}/10 ({calitate.get('stare_conservare') or 'stare'})."
+        )
+
+    for steag in strategie.get("steaguri_rosii") or []:
+        slabe.append(steag.get("risc") or "")
+
+    return [x for x in forte if x], [x for x in slabe if x]
+
+
 @mcp.tool()
 def genereaza_raport_complet_pdf(
     adresa_sau_identificator: Annotated[
@@ -1364,6 +1785,10 @@ def genereaza_raport_complet_pdf(
                                     "comparabile_utilizate": comps_data,
                                     "provenienta": "estimat",
                                 }
+                                if eval_res.get("piata"):
+                                    date_proprietate.setdefault(
+                                        "analiza_piata", eval_res["piata"]
+                                    )
                             else:
                                 date_proprietate["evaluare_anevar"] = {
                                     "status": "indisponibil",
@@ -1596,6 +2021,22 @@ def genereaza_raport_complet_pdf(
         ]
         date_proprietate["checklist_receptie"] = chk_items
         date_proprietate["receptie_checklist"] = chk_items
+
+    # Strategie de negociere, costuri consolidate și sinteza executivă.
+    #
+    # These are the sections the web UI and the PDF have always rendered but
+    # nothing ever filled on a real listing -- the PDF substituted defaults for
+    # them, so a generated dossier showed invented market and ESG figures while
+    # the demo showed authored ones. They are computed here, from the listing
+    # and the valuation, or they are marked unavailable.
+    _completeaza_strategie(date_proprietate, sub)
+
+    # Coordonatele, urcate din blocul de locație: PDF-ul și interfața le citesc
+    # de la rădăcină, iar fără ele harta din raport rămâne goală.
+    loc_block = date_proprietate.get("locatie") or {}
+    if loc_block.get("status") == "success":
+        date_proprietate.setdefault("lat", loc_block.get("lat"))
+        date_proprietate.setdefault("lon", loc_block.get("lon"))
 
     # Scor general, derivat din secțiunile care chiar au produs o măsurătoare.
     scor, calificativ, baza = _scor_general(date_proprietate)

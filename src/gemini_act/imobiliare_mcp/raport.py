@@ -58,7 +58,9 @@ def render(v: Valuation, *, comps_source: str, rents_source: str,
            observatii_vizuale: str | None = None, viziune=None,
            street_view_file: str | None = None,
            static_map_file: str | None = None,
-           scor_accesibilitate: float | None = None) -> str:
+           scor_accesibilitate: float | None = None,
+           strategie: dict | None = None,
+           buget: dict | None = None) -> str:
     s, p, r = v.subject, v.params, v.rates
     ask, surface = s.get("price_eur"), s.get("surface_sqm")
     today = date.today().strftime("%d.%m.%Y")
@@ -559,6 +561,83 @@ def render(v: Valuation, *, comps_source: str, rents_source: str,
     for item in risks:
         add(f"- {item}")
     add("")
+
+    # 13b ----------------------------------------------------------------
+    # The valuation says what it is worth; this says what to offer for it. The
+    # two are kept apart on purpose -- see `negociere.py`.
+    if strategie and strategie.get("disponibil"):
+        sc = strategie.get("scara") or {}
+        add("## 13b. Strategia de negociere")
+        add("")
+        add("> Valorile de mai jos sunt practică de piață, nu măsurători ale acestui imobil, "
+            "și nu modifică valoarea estimată în secțiunile anterioare.")
+        add("")
+        add("| Parametru | Valoare | Rol |")
+        add("|---|---:|---|")
+        contra = sc.get("contraoferta_probabila_eur") or []
+        randuri = [
+            ("Preț listat", sc.get("pret_listat_eur"), "Ancora publică a vânzătorului"),
+            ("Valoare tehnică estimată", sc.get("valoare_estimata_eur"),
+             "Rezultatul grilei de comparabile"),
+            ("Ofertă inițială", sc.get("oferta_initiala_eur"),
+             "Punct de ancorare, transmis în scris"),
+            ("Preț țintă", sc.get("pret_tinta_eur"), "Punctul de echilibru al tranzacției"),
+            ("Preț maxim acceptabil", sc.get("pret_maxim_acceptabil_eur"), "Plafon justificabil"),
+            ("Prag de abandon", sc.get("walk_away_eur"), "Peste acest nivel se renunță"),
+        ]
+        for eticheta, valoare, rol in randuri:
+            add(f"| {eticheta} | {_eur(valoare)} | {rol} |")
+        if len(contra) == 2:
+            add(f"| Contraofertă probabilă | {_eur(contra[0])} – {_eur(contra[1])} | "
+                "Reacția anticipată a vânzătorului |")
+        add("")
+
+        if concesii := sc.get("concesii_descrescatoare_eur"):
+            pasi = " → ".join(_eur(x) for x in concesii)
+            add(f"**Concesii descrescătoare:** {pasi}. Pași egali semnalează o marjă neepuizată.")
+            add("")
+
+        profil = strategie.get("profil_vanzator") or {}
+        if profil:
+            add(f"**Profil vânzător:** {profil.get('profil')} "
+                f"({', '.join(profil.get('semnale_detectate') or []) or 'fără semnale'}).")
+            add("")
+            add(f"- Ce funcționează: {profil.get('tactica_eficienta')}")
+            add(f"- Ce nu funcționează: {profil.get('erori_de_evitat')}")
+            add("")
+
+        if parghii := strategie.get("parghii"):
+            add("**Pârghii tehnice de reducere:**")
+            add("")
+            add("| Problemă | Reducere justificată | Argument |")
+            add("|---|---:|---|")
+            for item in parghii:
+                red = item.get("reducere_justificata_eur") or []
+                interval = f"{_eur(red[0])} – {_eur(red[1])}" if len(red) == 2 else "n/a"
+                add(f"| {item.get('problema')} | {interval} | {item.get('argument')} |")
+            add("")
+
+        if regula := strategie.get("regula_decizionala"):
+            add(f"> **{regula}**")
+            add("")
+
+    # 13c ----------------------------------------------------------------
+    if buget and buget.get("disponibil"):
+        add("## 13c. Bugetul consolidat al proiectului")
+        add("")
+        add("Prețul nu este bugetul. Pragul de abandon se calculează din suma de mai jos.")
+        add("")
+        add("| Componentă | Interval | Temei |")
+        add("|---|---:|---|")
+        for post in buget.get("posturi") or []:
+            minim, maxim = post.get("minim_eur"), post.get("maxim_eur")
+            if minim is None:
+                continue
+            interval = _eur(minim) if minim == maxim else f"{_eur(minim)} – {_eur(maxim)}"
+            add(f"| {post.get('componenta')} | {interval} | {post.get('temei')} |")
+        add(f"| **Cost total consolidat** | **{_eur(buget.get('total_minim_eur'))} – "
+            f"{_eur(buget.get('total_maxim_eur'))}** | Prețul plus tot ce urmează după semnare |")
+        add("")
 
     # 14 -----------------------------------------------------------------
     add("## 14. Verificarea conținutului minim (SEV 106 §30.6)")

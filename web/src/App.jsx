@@ -12,6 +12,7 @@ import AppliancesCatalog from './components/AppliancesCatalog.jsx';
 import DeveloperAudit from './components/DeveloperAudit.jsx';
 import ReviewsSentiment from './components/ReviewsSentiment.jsx';
 import MarketAndRisk from './components/MarketAndRisk.jsx';
+import NegotiationStrategy from './components/NegotiationStrategy.jsx';
 import HandoverChecklist from './components/HandoverChecklist.jsx';
 import MethodologyNotes from './components/MethodologyNotes.jsx';
 
@@ -30,6 +31,7 @@ const SECTIONS = [
   { id: 'appliances', label: 'Dotări incluse' },
   { id: 'exterior', label: 'Street View & satelit' },
   { id: 'developer', label: 'Dezvoltator & recenzii' },
+  { id: 'negotiation', label: 'Negociere & buget' },
   { id: 'risk', label: 'Piață, costuri & riscuri' },
   { id: 'method', label: 'Metodologie' },
 ];
@@ -205,6 +207,13 @@ export default function App() {
                   complexName={data.complex_name}
                 />
               </>
+            )}
+
+            {shows('negotiation') && (
+              <NegotiationStrategy
+                strategie={data.strategie_negociere}
+                buget={data.buget_consolidat}
+              />
             )}
 
             {shows('risk') && <MarketAndRisk data={data} />}

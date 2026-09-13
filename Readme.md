@@ -180,7 +180,7 @@ Copy the client ID and secret into your environment.
 export GEMINI_ACT_OAUTH_CLIENT_ID=...
 export GEMINI_ACT_OAUTH_CLIENT_SECRET=...
 export GEMINI_ACT_STATE_SECRET=$(openssl rand -hex 32)
-./deploy/deploy_cloud_run.sh
+./deploy/deploy.sh
 ```
 
 The script deploys twice on purpose: the service's own URL is both the OAuth redirect base and the

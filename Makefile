@@ -38,7 +38,7 @@ setup:  ## One-time Google Cloud setup
 	./deploy/setup_gcp.sh
 
 deploy:  ## Build and deploy to Cloud Run
-	./deploy/deploy_cloud_run.sh
+	./deploy/deploy.sh
 
 deploy-adk-ui:  ## Deploy the ADK dev web UI to Cloud Run (IAP-locked)
 	./deploy/adk_ui/deploy_cloud_run.sh

@@ -45,6 +45,22 @@ class AuditRequest(BaseModel):
     )
 
 
+def _completeaza(date_audit: dict[str, Any]) -> dict[str, Any]:
+    """Run the demo set through the same completion the real pipeline runs.
+
+    The sample and a generated report used to have different shapes: the sample
+    carried hand-authored market, cost and summary blocks that nothing ever
+    produced for a real listing, so the PDF filled those sections with defaults
+    and the web UI left them empty. Both now go through `_completeaza_strategie`,
+    so what the demo shows is what a real audit shows.
+    """
+    try:
+        server._completeaza_strategie(date_audit, None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Nu s-a putut completa strategia de negociere: %s", exc)
+    return date_audit
+
+
 def _with_location(date_audit: dict[str, Any]) -> dict[str, Any]:
     """Attach live coordinates, imagery URLs and 500 m amenities to an audit.
 
@@ -71,7 +87,7 @@ def _with_location(date_audit: dict[str, Any]) -> dict[str, Any]:
 @router.get("/demo")
 async def get_demo_audit() -> dict[str, Any]:
     """Returnează setul de date demonstrativ complet pentru inspecția instantanee a interfeței."""
-    demo_copy = _with_location(dict(DEMO_AUDIT_DATA))
+    demo_copy = _completeaza(_with_location(dict(DEMO_AUDIT_DATA)))
     pdf_path = generator_pdf.genereaza_raport_complet_pdf(demo_copy)
     filename = Path(pdf_path).name
     pdf_url = f"/api/audit/pdf/{filename}"
@@ -93,7 +109,7 @@ async def generate_audit_report(request: AuditRequest) -> dict[str, Any]:
 
     # Verificare dacă se solicită mod demo
     if is_demo or query.lower() in ("demo", "test", "aviatiei", "sample"):
-        demo_copy = _with_location(dict(DEMO_AUDIT_DATA))
+        demo_copy = _completeaza(_with_location(dict(DEMO_AUDIT_DATA)))
         # Generare PDF din datele demo
         pdf_path = generator_pdf.genereaza_raport_complet_pdf(demo_copy)
         filename = Path(pdf_path).name
@@ -120,7 +136,7 @@ async def generate_audit_report(request: AuditRequest) -> dict[str, Any]:
             "titlu": result.get("titlu"),
             "adresa": query,
         }
-        date_audit = _with_location(date_audit)
+        date_audit = _completeaza(_with_location(date_audit))
         pdf_url = f"/api/audit/pdf/{filename}" if filename else ""
 
         return {

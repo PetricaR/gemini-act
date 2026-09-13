@@ -51,20 +51,29 @@ export default function MarketAndRisk({ data }) {
               </div>
               <div className="stat">
                 <div className="label">Variație anuală</div>
-                <div
-                  className={`stat-value flex items-center gap-1 ${
-                    (market.variatie_anuala_procent ?? 0) >= 0 ? 'text-emerald-700' : 'text-rose-700'
-                  }`}
-                >
-                  <TrendingUp className="h-4 w-4" />
-                  {percent(market.variatie_anuala_procent, { signed: true })}
-                </div>
+                {market.variatie_anuala_procent == null ? (
+                  <>
+                    <div className="stat-value text-slate-400">Nedeterminat</div>
+                    {market.motiv_tendinta && <div className="stat-note">{market.motiv_tendinta}</div>}
+                  </>
+                ) : (
+                  <div
+                    className={`stat-value flex items-center gap-1 ${
+                      market.variatie_anuala_procent >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                    }`}
+                  >
+                    <TrendingUp className="h-4 w-4" />
+                    {percent(market.variatie_anuala_procent, { signed: true })}
+                  </div>
+                )}
               </div>
               <div className="stat">
                 <div className="label">Timp mediu de expunere</div>
                 <div className="stat-value flex items-center gap-1">
                   <Clock className="h-4 w-4 text-slate-400" />
-                  {num(market.timp_mediu_expunere_luni, 1)} luni
+                  {market.timp_mediu_expunere_luni == null
+                    ? 'Nedeterminat'
+                    : `${num(market.timp_mediu_expunere_luni, 1)} luni`}
                 </div>
               </div>
               <div className="stat">
@@ -115,15 +124,30 @@ export default function MarketAndRisk({ data }) {
               <div className="rounded-xl border border-slate-200 p-4">
                 <div className="label mb-3">Costuri anuale de deținere</div>
                 <dl className="space-y-1 text-xs">
-                  <CostRow label="Întreținere lunară" value={eur(holding.intretinere_lunara_eur)} />
-                  <CostRow label="Fond de reparații lunar" value={eur(holding.fond_reparatii_lunar_eur)} />
-                  <CostRow label="Impozit anual" value={eur(holding.impozit_anual_eur)} />
-                  <CostRow label="Asigurare anuală" value={eur(holding.asigurare_anuala_eur)} />
-                  <CostRow label="Total anual" value={eur(holding.total_anual_eur)} strong />
+                  {holding.posturi ? (
+                    holding.posturi.map((post) => (
+                      <CostRow
+                        key={post.componenta}
+                        label={post.componenta}
+                        value={rangeLabel(post)}
+                      />
+                    ))
+                  ) : (
+                    <>
+                      <CostRow label="Întreținere lunară" value={eur(holding.intretinere_lunara_eur)} />
+                      <CostRow
+                        label="Fond de reparații lunar"
+                        value={eur(holding.fond_reparatii_lunar_eur)}
+                      />
+                      <CostRow label="Impozit anual" value={eur(holding.impozit_anual_eur)} />
+                      <CostRow label="Asigurare anuală" value={eur(holding.asigurare_anuala_eur)} />
+                      <CostRow label="Total anual" value={eur(holding.total_anual_eur)} strong />
+                    </>
+                  )}
                 </dl>
-                {holding.comentariu && (
+                {(holding.comentariu || holding.motiv) && (
                   <p className="mt-3 border-t border-slate-100 pt-3 text-[11px] leading-relaxed text-slate-500">
-                    {holding.comentariu}
+                    {holding.comentariu || holding.motiv}
                   </p>
                 )}
               </div>
@@ -133,18 +157,30 @@ export default function MarketAndRisk({ data }) {
               <div className="rounded-xl border border-slate-200 p-4">
                 <div className="label mb-3">Costuri de tranzacționare</div>
                 <dl className="space-y-1 text-xs">
-                  <CostRow
-                    label="Onorariu notarial"
-                    value={percent(transaction.onorariu_notarial_procent)}
-                  />
-                  <CostRow
-                    label="Taxă de intabulare"
-                    value={percent(transaction.taxa_intabulare_procent, { decimals: 2 })}
-                  />
-                  <CostRow
-                    label="Comision agenție"
-                    value={percent(transaction.comision_agentie_procent)}
-                  />
+                  {transaction.posturi ? (
+                    transaction.posturi.map((post) => (
+                      <CostRow
+                        key={post.componenta}
+                        label={post.componenta}
+                        value={rangeLabel(post)}
+                      />
+                    ))
+                  ) : (
+                    <>
+                      <CostRow
+                        label="Onorariu notarial"
+                        value={percent(transaction.onorariu_notarial_procent)}
+                      />
+                      <CostRow
+                        label="Taxă de intabulare"
+                        value={percent(transaction.taxa_intabulare_procent, { decimals: 2 })}
+                      />
+                      <CostRow
+                        label="Comision agenție"
+                        value={percent(transaction.comision_agentie_procent)}
+                      />
+                    </>
+                  )}
                   <CostRow label="Total estimat" value={eur(transaction.total_estimat_eur)} strong />
                 </dl>
               </div>
@@ -228,6 +264,12 @@ export default function MarketAndRisk({ data }) {
       )}
     </>
   );
+}
+
+function rangeLabel(post) {
+  if (post.minim_eur == null) return 'Indisponibil';
+  if (post.minim_eur === post.maxim_eur) return eur(post.minim_eur);
+  return `${eur(post.minim_eur)} – ${eur(post.maxim_eur)}`;
 }
 
 function CostRow({ label, value, strong = false }) {

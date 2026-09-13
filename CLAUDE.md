@@ -23,7 +23,7 @@ make test                 # uv run pytest -q
 make lint                 # uv run ruff check .
 make fmt                  # uv run ruff format . && ruff check --fix .
 make setup                # ./deploy/setup_gcp.sh — one-time GCP project setup
-make deploy                # ./deploy/deploy_cloud_run.sh — deploys twice (see below)
+make deploy                # ./deploy/deploy.sh — deploys twice (see below)
 ```
 
 Run a single test: `uv run pytest tests/test_events.py::test_name -q`. Tests live flat under
@@ -186,5 +186,5 @@ changing one. A few with the widest blast radius:
   another Chat user's identity.
 - `mcp_enabled` — each enabled Workspace server costs response time on every turn.
 
-`deploy/deploy_cloud_run.sh` deploys twice on purpose: the service's own Cloud Run URL is both the
+`deploy/deploy.sh` deploys twice on purpose: the service's own Cloud Run URL is both the
 OAuth redirect base and the Chat JWT audience, so the first deploy exists only to learn the URL.

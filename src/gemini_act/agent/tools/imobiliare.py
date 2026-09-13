@@ -501,6 +501,71 @@ async def evalueaza_proprietate(
     return summary
 
 
+async def strategie_negociere(
+    identificator: str,
+    buget_total_max: float = 0,
+    deviz_renovare: float = 0,
+    prin_agentie: bool = False,
+) -> dict[str, Any]:
+    """Turn a valuation into an offer: what to bid, what to expect back, and when
+    to walk away.
+
+    Runs the valuation first, then builds the offer ladder on top of it: the
+    opening offer and what anchors it, the counter the seller is likely to make,
+    the target, the ceiling, and the price above which the purchase is abandoned.
+    It also reads the seller's likely position from signals the listing already
+    carries — developer or agency, how long it has been listed, whether the price
+    has already been cut, whether the flat is empty — and turns the defects seen
+    in the photographs into euro amounts with the sentence that argues each one.
+
+    The ranges are market practice for the Bucharest residential segment, not
+    measurements of this property, and the result says so on every figure. Present
+    them that way. Nothing here changes the estimated value.
+
+    It returns three written offers as text. They are drafts for the user to
+    review and send themselves — never present one as already sent.
+
+    Args:
+        identificator: Listing id or full offer URL, e.g. "275807510".
+        buget_total_max: The buyer's total budget in EUR, covering price, fees,
+            renovation and furnishing. When given it caps the walk-away price
+            independently of what the property is worth. 0 to leave it out.
+        deviz_renovare: A known repair estimate in EUR. 0 to derive it from the
+            defects the vision pass finds.
+        prin_agentie: Whether the buyer would owe an agency commission.
+
+    Returns:
+        A dict with "status", and on success the ladder, the seller profile, the
+        price levers, the red flags that need checking, the consolidated budget
+        and the draft offers. On error an "error_message".
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import strategie_negociere as _strategie
+
+        return _strategie(
+            identificator=identificator,
+            buget_total_max=buget_total_max or None,
+            deviz_renovare=deviz_renovare or None,
+            prin_agentie=prin_agentie,
+        )
+
+    try:
+        result = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Negotiation strategy", exc)
+
+    if result.get("disponibil") is False:
+        return {
+            "status": "error",
+            "error_message": result.get("motiv", "Strategia nu a putut fi calculată."),
+        }
+    return {"status": "success", **result}
+
+
 async def inspecteaza_vizual_proprietate(
     identificator: str,
     intrebare: str,
@@ -861,7 +926,24 @@ async def genereaza_raport_complet_pdf(
     if error := result.get("error"):
         return {"status": "error", "error_message": error}
 
-    return {"status": "success", **result}
+    # `date_audit` is the whole dossier -- tens of KB of nested findings that the
+    # PDF renders and the model has no use for. It is replaced by a list of the
+    # sections that produced something, so the answer can say what the report
+    # covers without carrying it.
+    dosar = result.pop("date_audit", None) or {}
+    sectiuni = [
+        cheie
+        for cheie, valoare in dosar.items()
+        if isinstance(valoare, dict) and valoare.get("disponibil") is not False
+    ]
+    return {
+        "status": "success",
+        **result,
+        "sectiuni_disponibile": sectiuni,
+        "scor_general": dosar.get("scor_general"),
+        "calificativ_general": dosar.get("calificativ_general"),
+        "rezumat_executiv": dosar.get("rezumat_executiv"),
+    }
 
 
 async def analizeaza_electrocasnice_si_defecte_finisaje(
@@ -912,6 +994,7 @@ IMOBILIARE_TOOLS = [
     detalii_proprietate,
     statistici_piata,
     evalueaza_proprietate,
+    strategie_negociere,
     inspecteaza_vizual_proprietate,
     analizeaza_mobilier_si_finisaje,
     analizeaza_electrocasnice_si_defecte_finisaje,

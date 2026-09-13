@@ -1298,22 +1298,46 @@ def genereaza_raport_complet_pdf(
 
     # 9.1 Dinamica Pieței & Cea mai bună utilizare
     poveste.append(Paragraph("<b>Dinamica Pieței Rezidențiale & Analiza Micro-Zonei</b>", stiluri["SectiuneH3"]))
+    # Nothing here is substituted. The dossier used to print +6,2%/an, 3,5 luni
+    # and 14 oferte for every property, next to figures that were real -- an
+    # unmeasured indicator now says so instead of borrowing a plausible number.
     zona_p = an_piata.get("zona") or adresa or "Zonă Urbană"
-    p_med = an_piata.get("pret_mediu_zona_eur_mp") or (round(pret_mp) if pret_mp else 2200)
-    var_an = an_piata.get("variatie_anuala_procent") or 6.2
-    exp_luni = an_piata.get("timp_mediu_expunere_luni") or 3.5
-    oferta_sim = an_piata.get("oferta_activa_similara") or 14
-    tendinta = an_piata.get("tendinta") or "Stabilă / Creștere moderată"
-    com_piata = an_piata.get("comentariu") or "Segment rezidențial cu cerere susținută și lichiditate bună în piața locală."
+    p_med = an_piata.get("pret_mediu_zona_eur_mp") or (round(pret_mp) if pret_mp else None)
+    var_an = an_piata.get("variatie_anuala_procent")
+    exp_luni = an_piata.get("timp_mediu_expunere_luni")
+    oferta_sim = an_piata.get("oferta_activa_similara")
+    tendinta = an_piata.get("tendinta")
+    com_piata = an_piata.get("comentariu") or an_piata.get("motiv") or ""
 
+    _ND = "Nedeterminat"
     randuri_piata = [
         ["Indicator de Micro-Piață", "Valoare Măsurată", "Impact Asupra Negocierii"],
         ["Zonă / Micro-Piață", str(zona_p)[:35], "Segment rezidențial de referință"],
-        ["Preț Mediu Unitar Zonă", f"{p_med:,.0f} EUR/mp", "Barieră de referință a cumpărătorilor"],
-        ["Variație Anuală de Preț", f"{var_an:+.1f}% / an", "Evoluția valorilor de tranzacționare"],
-        ["Timp Mediu de Expunere", f"{exp_luni} luni", "Viteza de absorbție pe segmentul curent"],
-        ["Ofertă Activă Concurentă", f"{oferta_sim} proprietăți", "Nivelul de concurență din proximitate"],
-        ["Tendință Generală Piață", tendinta, "Poziția cumpărătorului în negociere"],
+        [
+            "Preț Mediu Unitar Zonă",
+            f"{p_med:,.0f} EUR/mp" if p_med else _ND,
+            "Barieră de referință a cumpărătorilor",
+        ],
+        [
+            "Variație Anuală de Preț",
+            f"{var_an:+.1f}% / an" if var_an is not None else _ND,
+            "Cere o serie de timp, indisponibilă dintr-un instantaneu al ofertei",
+        ],
+        [
+            "Timp Mediu de Expunere",
+            f"{exp_luni} luni" if exp_luni is not None else _ND,
+            "Viteza de absorbție pe segmentul curent",
+        ],
+        [
+            "Ofertă Activă Concurentă",
+            f"{oferta_sim} proprietăți" if oferta_sim else _ND,
+            "Nivelul de concurență din proximitate",
+        ],
+        [
+            "Tendință Generală Piață",
+            str(tendinta) if tendinta else _ND,
+            "Poziția cumpărătorului în negociere",
+        ],
     ]
     poveste.append(_formateaza_tabel(randuri_piata, stiluri, [150, 110, 227]))
     if com_piata:
@@ -1327,50 +1351,127 @@ def genereaza_raport_complet_pdf(
     # 9.2 Costuri de deținere & Tranzacționare
     poveste.append(Paragraph("<b>Costuri Anuale de Deținere (Holding Costs) & Costuri de Tranzacție</b>", stiluri["SectiuneH3"]))
 
-    sup_utila_ref = suprafata if suprafata > 0 else 60
-    intretinere = cost_det.get("intretinere_lunara_eur") or round(sup_utila_ref * 1.5)
-    fond_rep = cost_det.get("fond_reparatii_lunar_eur") or round(sup_utila_ref * 0.4)
-    impozit = cost_det.get("impozit_anual_eur") or round(sup_utila_ref * 1.2)
-    asig = cost_det.get("asigurare_anuala_eur") or 60
-    total_det = cost_det.get("total_anual_eur") or round((intretinere + fond_rep) * 12 + impozit + asig)
-    com_det = cost_det.get("comentariu", "")
+    # Each line is now a computed post with its own legal basis, or an explicit
+    # "indisponibil" -- maintenance used to be the surface times a constant and
+    # was printed as if it had been read off a bill.
+    randuri_costuri = [["Post de Cheltuială", "Cost Estimat", "Temei / Detalii"]]
+    for post in cost_det.get("posturi") or []:
+        minim, maxim = post.get("minim_eur"), post.get("maxim_eur")
+        if minim is None:
+            valoare = "Indisponibil"
+            detaliu = post.get("motiv_indisponibil") or post.get("temei") or "—"
+        elif minim == maxim:
+            valoare = f"~{minim:,.0f} EUR/an"
+            detaliu = post.get("temei") or "—"
+        else:
+            valoare = f"{minim:,.0f} – {maxim:,.0f} EUR/an"
+            detaliu = post.get("temei") or "—"
+        randuri_costuri.append([str(post.get("componenta") or "—"), valoare, str(detaliu)[:150]])
 
-    notar_pct = cost_tranz.get("onorariu_notarial_procent", 1.5)
-    intab_pct = cost_tranz.get("taxa_intabulare_procent", 0.15)
-    agentie_pct = cost_tranz.get("comision_agentie_procent", 2.0)
-    pret_baza_tranz = val_piata or pret or 100000
-    total_tranz = cost_tranz.get("total_estimat_eur") or round(pret_baza_tranz * (notar_pct + intab_pct + agentie_pct) / 100)
+    for post in (cost_tranz.get("posturi") or []):
+        minim, maxim = post.get("minim_eur"), post.get("maxim_eur")
+        if minim is None:
+            continue
+        valoare = (
+            f"~{minim:,.0f} EUR" if minim == maxim else f"{minim:,.0f} – {maxim:,.0f} EUR"
+        )
+        randuri_costuri.append(
+            [str(post.get("componenta") or "—"), valoare, str(post.get("temei") or "—")[:150]]
+        )
 
-    randuri_costuri = [
-        ["Post de Cheltuială", "Cost Estimat", "Periodicitate / Detalii"],
-        ["Întreținere Asociație & Mentenanță", f"~{intretinere:,.0f} EUR/lună", "Include salubritate, pază, servicii comune"],
-        ["Fond de Reparații & Rulment", f"~{fond_rep:,.0f} EUR/lună", "Constituit legal la nivelul asociației"],
-        ["Impozit Local Anual pe Clădire", f"~{impozit:,.0f} EUR/an", "Taxe locale DITL conform Codului Fiscal"],
-        ["Asigurare Imobil (PAD + Facultativă)", f"~{asig:,.0f} EUR/an", "Poliță obligatorie și acoperire all-risks"],
-        ["TOTAL ESTIMAT COSTURI DE DEȚINERE", f"<b>~{total_det:,.0f} EUR/an</b>", "Impactul anual în bugetul cumpărătorului"],
-        ["Costuri Tranzacționare (Notar + CF + Agenție)", f"~{total_tranz:,.0f} EUR", f"Notar: {notar_pct}% • ANCPI: {intab_pct}% • Agenție: {agentie_pct}%"],
-    ]
+    total_tranz = cost_tranz.get("total_estimat_eur")
+    if total_tranz:
+        randuri_costuri.append([
+            "TOTAL COSTURI DE TRANZACȚIONARE",
+            f"<b>~{total_tranz:,.0f} EUR</b>",
+            "Sumă unică, la semnare",
+        ])
+    if len(randuri_costuri) == 1:
+        randuri_costuri.append([
+            "Costuri conexe",
+            "Indisponibil",
+            "Fără un preț de referință nu se pot calcula taxele de transfer.",
+        ])
+
     poveste.append(_formateaza_tabel(randuri_costuri, stiluri, [180, 110, 197]))
-    if com_det:
-        poveste.append(Paragraph(f"<i>Observație costuri: {com_det}</i>", stiluri["CorpMuted"]))
+    if nota_tranz := cost_tranz.get("nota"):
+        poveste.append(Paragraph(f"<i>{nota_tranz}</i>", stiluri["CorpMuted"]))
+    if motiv_det := cost_det.get("motiv"):
+        poveste.append(Paragraph(f"<i>{motiv_det}</i>", stiluri["CorpMuted"]))
     poveste.append(Spacer(1, 8))
+
+    # Bugetul consolidat: prețul nu este bugetul.
+    buget = date_proprietate.get("buget_consolidat") or {}
+    if buget.get("disponibil"):
+        poveste.append(
+            Paragraph("<b>Bugetul Consolidat al Proiectului</b>", stiluri["SectiuneH3"])
+        )
+        randuri_buget = [["Componentă", "Interval Estimat", "Temei"]]
+        for post in buget.get("posturi") or []:
+            minim, maxim = post.get("minim_eur"), post.get("maxim_eur")
+            if minim is None:
+                continue
+            valoare = (
+                f"~{minim:,.0f} EUR" if minim == maxim else f"{minim:,.0f} – {maxim:,.0f} EUR"
+            )
+            randuri_buget.append(
+                [str(post.get("componenta")), valoare, str(post.get("temei") or "—")[:130]]
+            )
+        randuri_buget.append([
+            "COST TOTAL CONSOLIDAT",
+            f"<b>{buget.get('total_minim_eur'):,.0f} – "
+            f"{buget.get('total_maxim_eur'):,.0f} EUR</b>",
+            "Prețul plus tot ce urmează după semnare",
+        ])
+        poveste.append(_formateaza_tabel(randuri_buget, stiluri, [170, 120, 197]))
+        poveste.append(Spacer(1, 8))
 
     # 9.3 Profil ESG & Sustenabilitate
     poveste.append(Paragraph("<b>Profil ESG & Performanță Energetică / Climatică</b>", stiluri["SectiuneH3"]))
-    clasa_en = esg_data.get("clasa_energetica") or date_proprietate.get("clasa_energetica") or "A"
-    consum_kwh = esg_data.get("consum_specific_kwh_mp_an") or "115.4"
-    certif_v = esg_data.get("certificare") or (date_proprietate.get("specificatii_dezvoltator", {}) or {}).get("certificare_verde") or "BREEAM Excellent / NZEB"
-    risc_clim = esg_data.get("riscuri_climatice") or "Conform cod seismic P100-1; absență risc inundație."
-    social_txt = esg_data.get("social") or "Securitate acces, monitorizare video, spații verzi amenajate."
-    guvern_txt = esg_data.get("guvernanta") or "Asociație de proprietari constituită, contracte de mentenanță active."
+    # An energy class, a green certification and a seismic verdict are documents,
+    # not inferences. The dossier used to assert class A, 115,4 kWh/mp/an and a
+    # BREEAM certification for properties nobody had a certificate for.
+    _NEDECLARAT = "Nedeclarat în anunț"
+    clasa_en = esg_data.get("clasa_energetica") or date_proprietate.get("clasa_energetica")
+    consum_kwh = esg_data.get("consum_specific_kwh_mp_an")
+    certif_v = esg_data.get("certificare") or (
+        date_proprietate.get("specificatii_dezvoltator", {}) or {}
+    ).get("certificare_verde")
+    risc_clim = esg_data.get("riscuri_climatice")
+    social_txt = esg_data.get("social")
+    guvern_txt = esg_data.get("guvernanta")
 
     randuri_esg = [
-        ["Pilon ESG", "Performanță Raportată", "Evaluare Tehnică"],
-        ["Mediu (Eficiență Energetică)", f"Clasa {clasa_en}", f"Consum specific: {consum_kwh} kWh/mp/an"],
-        ["Certificare Ecologică Verde", str(certif_v), "Standard recunoscut de sustenabilitate"],
-        ["Risc Seismic & Climatic", str(risc_clim), "Proiectare seismică și absență risc inundație"],
-        ["Social & Comunitate", str(social_txt), "Infrastructură comunitară dedicată"],
-        ["Guvernanță Asociație", str(guvern_txt), "Transparență administrativă și carte tehnică"],
+        ["Pilon ESG", "Performanță Raportată", "Sursa / Document Necesar"],
+        [
+            "Mediu (Eficiență Energetică)",
+            f"Clasa {clasa_en}" if clasa_en else _NEDECLARAT,
+            (
+                f"Consum specific: {consum_kwh} kWh/mp/an"
+                if consum_kwh
+                else "Certificatul de performanță energetică, obligatoriu la vânzare"
+            ),
+        ],
+        [
+            "Certificare Ecologică Verde",
+            str(certif_v) if certif_v else _NEDECLARAT,
+            "Certificatul emis de organismul de certificare",
+        ],
+        [
+            "Risc Seismic",
+            str(risc_clim) if risc_clim else "Neverificat",
+            "Evidențele AMCCRS pentru adresa exactă (Legea nr. 212/2022)",
+        ],
+        [
+            "Social & Comunitate",
+            str(social_txt) if social_txt else _NEDECLARAT,
+            "Constatare la vizionare",
+        ],
+        [
+            "Guvernanță Asociație",
+            str(guvern_txt) if guvern_txt else _NEDECLARAT,
+            "Adeverință de la asociația de proprietari",
+        ],
     ]
     poveste.append(_formateaza_tabel(randuri_esg, stiluri, [150, 140, 197]))
     poveste.append(Spacer(1, 8))
@@ -1378,10 +1479,20 @@ def genereaza_raport_complet_pdf(
     # 9.4 Registru Complet de Riscuri
     poveste.append(Paragraph("<b>Registru Complet de Riscuri & Măsuri de Mitigare</b>", stiluri["SectiuneH3"]))
     if not riscuri_lista:
+        # No invented probabilities. When no red flag was raised by the evidence,
+        # the register says exactly that rather than listing three generic risks
+        # with fabricated likelihoods next to them.
         riscuri_lista = [
-            {"risc": "Vicii ascunse la instalațiile îngropate", "probabilitate": "Medie", "impact": "Mediu", "mitigare": "Proba de presiune instalații la vizionare și garanție contractuală"},
-            {"risc": "Întârzieri la obținerea intabulării / actelor", "probabilitate": "Scăzută", "impact": "Ridicat", "mitigare": "Clauze penale zilnice în antecontractul notarial"},
-            {"risc": "Costuri comune suplimentare neprevăzute", "probabilitate": "Medie", "impact": "Scăzut", "mitigare": "Verificarea ultimelor bilanțuri ale asociației de proprietari"},
+            {
+                "risc": "Niciun semnal de risc ridicat din datele analizate automat",
+                "probabilitate": "—",
+                "impact": "—",
+                "mitigare": (
+                    "Analiza automată nu înlocuiește inspecția: extrasul CF, adeverința "
+                    "asociației și proba instalațiilor rămân obligatorii înainte de "
+                    "antecontract."
+                ),
+            }
         ]
     randuri_risc = [["Risc Identificat", "Probabilitate", "Impact", "Măsură Concretă de Reducere / Mitigare"]]
     for r in riscuri_lista:
@@ -1503,6 +1614,121 @@ def genereaza_raport_complet_pdf(
         _titlu_sectiune("Concluzie Finală & Strategie de Negociere"),
     ]))
 
+    # Scara de ofertare. Five numbers decided before the first phone call: an
+    # offer improvised at the table is the one that overpays.
+    strategie = date_proprietate.get("strategie_negociere") or {}
+    scara = strategie.get("scara") or {}
+    if strategie.get("disponibil") and scara:
+        poveste.append(Paragraph("<b>Scara de Ofertare</b>", stiluri["SectiuneH3"]))
+
+        def _eur_or_dash(valoare: Any) -> str:
+            return f"{valoare:,.0f} {moneda}" if valoare else "—"
+
+        contra = scara.get("contraoferta_probabila_eur") or []
+        randuri_scara = [
+            ["Parametru Financiar", "Valoare", "Rol în Negociere"],
+            [
+                "Preț listat",
+                _eur_or_dash(scara.get("pret_listat_eur")),
+                "Ancora publică a vânzătorului",
+            ],
+            [
+                "Valoare tehnică estimată",
+                _eur_or_dash(scara.get("valoare_estimata_eur")),
+                "Rezultatul grilei de comparabile",
+            ],
+            [
+                "Ofertă inițială recomandată",
+                _eur_or_dash(scara.get("oferta_initiala_eur")),
+                "Punct de ancorare, transmis în scris",
+            ],
+            [
+                "Contraofertă probabilă",
+                f"{contra[0]:,.0f} – {contra[1]:,.0f} {moneda}" if len(contra) == 2 else "—",
+                "Reacția anticipată a vânzătorului",
+            ],
+            [
+                "Preț țintă",
+                _eur_or_dash(scara.get("pret_tinta_eur")),
+                "Punctul de echilibru al tranzacției",
+            ],
+            [
+                "Preț maxim acceptabil",
+                _eur_or_dash(scara.get("pret_maxim_acceptabil_eur")),
+                "Plafon admis doar cu avantaje care elimină costuri viitoare",
+            ],
+            [
+                "Prag de abandon (walk-away)",
+                _eur_or_dash(scara.get("walk_away_eur")),
+                "Peste acest nivel tranzacția se abandonează",
+            ],
+        ]
+        poveste.append(_formateaza_tabel(randuri_scara, stiluri, [160, 110, 217]))
+
+        concesii_list = scara.get("concesii_descrescatoare_eur") or []
+        if concesii_list:
+            pasi = " → ".join(f"{c:,.0f}" for c in concesii_list)
+            poveste.append(Paragraph(
+                f"<i>Model de concesii descrescătoare, de la oferta inițială: {pasi} "
+                f"{moneda}. Pași egali semnalează vânzătorului o marjă neepuizată.</i>",
+                stiluri["CorpMuted"],
+            ))
+        if scara.get("walk_away_limitat_de_buget"):
+            poveste.append(Paragraph(
+                "<i>Pragul de abandon este impus de bugetul consolidat, nu de valoarea "
+                "imobilului.</i>",
+                stiluri["CorpMuted"],
+            ))
+        poveste.append(Spacer(1, 8))
+
+        profil = strategie.get("profil_vanzator") or {}
+        if profil:
+            poveste.append(
+                Paragraph("<b>Profilul Vânzătorului & Tactica Adaptată</b>", stiluri["SectiuneH3"])
+            )
+            randuri_profil = [
+                ["Aspect", "Constatare"],
+                ["Profil identificat", str(profil.get("profil") or "—")],
+                ["Semnale din anunț", ", ".join(profil.get("semnale_detectate") or []) or "—"],
+                ["Ce funcționează", str(profil.get("tactica_eficienta") or "—")],
+                ["Ce nu funcționează", str(profil.get("erori_de_evitat") or "—")],
+                ["Argument principal", str(profil.get("argument_principal") or "—")],
+            ]
+            poveste.append(_formateaza_tabel(randuri_profil, stiluri, [120, 367]))
+            poveste.append(Spacer(1, 8))
+
+        parghii = strategie.get("parghii") or []
+        if parghii:
+            poveste.append(Paragraph(
+                "<b>Pârghii Tehnice de Reducere a Prețului</b>", stiluri["SectiuneH3"]
+            ))
+            randuri_parghii = [["Problemă Constatată", "Reducere Justificată", "Argument"]]
+            for parghie in parghii:
+                reducere = parghie.get("reducere_justificata_eur") or []
+                randuri_parghii.append([
+                    str(parghie.get("problema") or "—"),
+                    f"{reducere[0]:,.0f} – {reducere[1]:,.0f} {moneda}"
+                    if len(reducere) == 2 else "—",
+                    str(parghie.get("argument") or "—"),
+                ])
+            poveste.append(_formateaza_tabel(randuri_parghii, stiluri, [150, 100, 237]))
+            poveste.append(Spacer(1, 8))
+
+        if regula := strategie.get("regula_decizionala"):
+            poveste.append(_creeaza_card_apel(
+                regula,
+                stiluri,
+                titlu="REGULA DECIZIONALĂ",
+                culoare_accent=GOOGLE_NAVY,
+                culoare_fundal=TINT_BLUE,
+            ))
+            poveste.append(Spacer(1, 8))
+
+        poveste.append(Paragraph(
+            f"<i>{strategie.get('sursa', '')}</i>", stiluri["CorpMuted"]
+        ))
+        poveste.append(Spacer(1, 8))
+
     if not evaluare_disponibila or val_piata is None:
         concluzie_text = (
             "<b>Nu se poate formula o strategie de negociere bazată pe cifre:</b> "
@@ -1513,12 +1739,21 @@ def genereaza_raport_complet_pdf(
         )
         accent_concluzie, tint_concluzie = GOOGLE_MUTED, GOOGLE_CARD_BG
     else:
-        prag_jos = val_min if val_min is not None else round(val_piata * 0.95)
+        prag_jos = (
+            scara.get("oferta_initiala_eur")
+            or (val_min if val_min is not None else round(val_piata * 0.95))
+        )
+        tinta_card = scara.get("pret_tinta_eur") or val_piata
+        walk = scara.get("walk_away_eur")
         interval_negociere = (
             f"Recomandăm începerea negocierii de la <b>{prag_jos:,.0f} {moneda}</b>, "
-            f"cu o țintă optimă de achiziție la <b>{val_piata:,.0f} {moneda}</b> "
+            f"cu o țintă de achiziție la <b>{tinta_card:,.0f} {moneda}</b> "
             f"(economie argumentabilă de <b>~{marja_eur:,.0f} {moneda}</b>). "
         )
+        if walk:
+            interval_negociere += (
+                f"Peste <b>{walk:,.0f} {moneda}</b> tranzacția se abandonează. "
+            )
         if scor_gen is None:
             deschidere = "Evaluarea de piață este disponibilă pe baza comparabilelor calificate. "
             accent_concluzie, tint_concluzie = GOOGLE_BLUE, TINT_BLUE

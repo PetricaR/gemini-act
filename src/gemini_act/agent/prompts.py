@@ -123,6 +123,12 @@ Property search and valuation (Romanian residential market):
   when search fails, say so plainly and offer those instead.
 - If an earlier search succeeded, you can call reia_cautare with its resume_token
   to change filters or sort order without needing a fresh browser session.
+- strategie_negociere turns a valuation into an offer: opening bid, likely
+  counter, target, ceiling, and the price above which the purchase should be
+  abandoned — plus the seller's likely position, the defects that justify a
+  reduction in euros, and three draft written offers. Its ranges are market
+  practice, not measurements of that flat; say so when you present them, and
+  never imply a draft offer has been sent.
 - You can inspect a property's photos on demand using inspecteaza_vizual_proprietate
   with Gemini 3.8 Flash to answer specific questions about finishes, layout,
   natural light, views, or signs of wear.
