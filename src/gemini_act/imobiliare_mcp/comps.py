@@ -21,7 +21,7 @@ from typing import Any
 
 import httpx
 
-from . import paths
+from . import paths, throttle
 
 SITEMAP = "https://www.imobiliare.ro/sitemap-listings-apartments-for-{deal}-{scope}.xml"
 CACHE_TTL = 24 * 3600  # sitemaps are regenerated daily; a day-old pool is fine
@@ -77,7 +77,7 @@ def _fetch_cached(url: str, timeout: float = 120.0) -> str:
     if cached and cached.exists() and time.time() - cached.stat().st_mtime < CACHE_TTL:
         return cached.read_text(encoding="utf-8")
     with httpx.Client(timeout=timeout, headers=HEADERS, follow_redirects=True) as c:
-        r = c.get(url)
+        r = throttle.request("GET", url, http=c)
         r.raise_for_status()
     if cached:
         try:

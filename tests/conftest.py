@@ -14,6 +14,14 @@ os.environ.setdefault("GEMINI_ACT_OAUTH_CLIENT_ID", "test-client-id")
 os.environ.setdefault("GEMINI_ACT_OAUTH_CLIENT_SECRET", "test-client-secret")
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "test-project")
 
+# `imobiliare_mcp.throttle` reads its pacing from the environment at import
+# time. Left at its defaults the suite would sleep over a second before every
+# stubbed image fetch, so the pace is flattened here — what the tests care
+# about is the de-duplication and the block detection, not the sleeping.
+os.environ.setdefault("IMOBILIARE_MIN_INTERVAL", "0")
+os.environ.setdefault("IMOBILIARE_JITTER", "0")
+os.environ.setdefault("IMOBILIARE_BACKOFF", "0")
+
 from gemini_act.config import Settings, get_settings  # noqa: E402
 from gemini_act.oauth.store import InMemoryTokenStore, TokenService  # noqa: E402
 
@@ -46,3 +54,19 @@ def _clear_caches():
     from gemini_act.oauth.store import get_token_service
 
     get_token_service.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _clean_throttle_memo():
+    """Nothing memoised may cross a test boundary.
+
+    `throttle` deliberately remembers listing records and photographs for the
+    life of the *process*, which is exactly what a test session is. Without
+    this, the second test to ask for https://img/0.jpg gets the first test's
+    bytes and passes for the wrong reason.
+    """
+    from gemini_act.imobiliare_mcp import throttle
+
+    throttle.forget_all()
+    yield
+    throttle.forget_all()

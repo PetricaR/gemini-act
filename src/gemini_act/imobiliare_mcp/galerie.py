@@ -10,7 +10,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
-import httpx
+from . import throttle
 
 HEADERS = {
     "User-Agent": (
@@ -32,16 +32,19 @@ def contact_sheet(urls: list[str], destination: Path, columns: int = 3,
         return None
 
     tiles = []
-    with httpx.Client(timeout=30, headers=HEADERS, follow_redirects=True) as http:
-        for url in urls:
-            try:
-                r = http.get(url)
-                if r.status_code == 200:
-                    im = Image.open(io.BytesIO(r.content)).convert("RGB")
-                    im.thumbnail(cell)
-                    tiles.append(im)
-            except Exception:      # one unreachable photo must not lose the sheet
-                continue
+    # `throttle.fetch_image` paces these and returns a photograph the vision
+    # pass has already downloaded from memory, so building the sheet after a
+    # valuation usually costs no requests at all.
+    for url in urls:
+        fetched = throttle.fetch_image(url, HEADERS)
+        if fetched is None:
+            continue
+        try:
+            im = Image.open(io.BytesIO(fetched[0])).convert("RGB")
+            im.thumbnail(cell)
+            tiles.append(im)
+        except Exception:      # one unreadable photo must not lose the sheet
+            continue
     if not tiles:
         return None
 

@@ -24,7 +24,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from . import paths
+from . import paths, throttle
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +247,6 @@ def _obtine_cale_imagine_locala(cale_sau_url: str | Any) -> str | None:
     if cale_sau_url.startswith(("http://", "https://")):
         try:
             import hashlib
-            import urllib.request
 
             h = hashlib.md5(cale_sau_url.encode("utf-8")).hexdigest()
             ext = ".jpg" if ("jpg" in cale_sau_url or "jpeg" in cale_sau_url) else (".png" if "png" in cale_sau_url else ".jpg")
@@ -256,12 +255,16 @@ def _obtine_cale_imagine_locala(cale_sau_url: str | Any) -> str | None:
             if dest.exists() and dest.stat().st_size > 0:
                 return str(dest.resolve())
 
-            req = urllib.request.Request(cale_sau_url, headers={"User-Agent": "Mozilla/5.0 (GeminiAct/1.0)"})
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                data = resp.read()
-                if data:
-                    dest.write_bytes(data)
-                    return str(dest.resolve())
+            # Through `throttle`, not urllib: by the time the PDF is built the
+            # vision pass has usually already fetched these photographs, and
+            # this returns its copy without a request. What is left is paced
+            # with everything else rather than racing it.
+            fetched = throttle.fetch_image(
+                cale_sau_url, {"User-Agent": "Mozilla/5.0 (GeminiAct/1.0)"}, timeout=3
+            )
+            if fetched and fetched[0]:
+                dest.write_bytes(fetched[0])
+                return str(dest.resolve())
         except Exception as exc:
             logger.debug("Nu s-a putut descărca imaginea remote %s: %s", cale_sau_url, exc)
             return None

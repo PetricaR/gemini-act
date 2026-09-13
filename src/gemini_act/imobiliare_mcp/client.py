@@ -17,6 +17,8 @@ from typing import Any
 
 import httpx
 
+from . import throttle
+
 AI_BASE = "https://api.ai-search.ringier.tech"
 HYDRATE_URL = "https://www.imobiliare.ro/api/ai-search/hydrate"
 TENANT_ID = "imobiliare"
@@ -74,7 +76,11 @@ class ImobiliareClient:
         self.close()
 
     def _post(self, url: str, payload: dict[str, Any]) -> Any:
-        r = self._http.post(url, json=payload)
+        # Through `throttle` rather than straight at `self._http`: it paces the
+        # call, and it recognises the anti-bot interstitial, which the portal
+        # serves as a 200 with an HTML body. Without that check this would
+        # cheerfully try to parse the block page as JSON.
+        r = throttle.request("POST", url, http=self._http, json=payload)
         # A valid-looking but no-longer-authorised session comes back as 403.
         # Sessions expire after a few minutes, so this is the common failure
         # and deserves a better message than a raw transport error.
@@ -195,14 +201,53 @@ class ImobiliareClient:
     # -- Portal layer -----------------------------------------------------
 
     def hydrate(self, ids: list[str], chunk: int = 120) -> list[dict[str, Any]]:
-        """Resolve listing ids to full records. No authentication required."""
-        listings: list[dict[str, Any]] = []
-        for i in range(0, len(ids), chunk):
-            data = self._post(
-                HYDRATE_URL, {"ids": ids[i : i + chunk], "card_format": "data"}
-            )
-            listings.extend(data.get("listings") or [])
-        return listings
+        """Resolve listing ids to full records. No authentication required.
+
+        Memoised per id, which matters more than it looks: a valuation asks
+        ten different tools about one listing, and each used to open its own
+        client and POST for the same record. That repetition -- not the total
+        number of listings -- is what the portal's anti-bot page was
+        complaining about. An id that resolves to nothing is remembered as
+        nothing, so a delisted property is asked about once too.
+        """
+        wanted = list(dict.fromkeys(_key(i) for i in ids if _key(i)))
+        known: dict[str, dict[str, Any] | None] = {}
+        missing: list[str] = []
+        for listing_id in wanted:
+            hit = throttle.cached(f"hydrate:{listing_id}")
+            if hit is _MISSING:
+                known[listing_id] = None
+            elif hit is not None:
+                known[listing_id] = hit
+            else:
+                missing.append(listing_id)
+
+        for i in range(0, len(missing), chunk):
+            batch = missing[i : i + chunk]
+            data = self._post(HYDRATE_URL, {"ids": batch, "card_format": "data"})
+            for record in data.get("listings") or []:
+                if listing_id := _key(record.get("id")):
+                    known[listing_id] = throttle.remember(f"hydrate:{listing_id}", record)
+            for listing_id in batch:
+                if listing_id not in known:
+                    throttle.remember(f"hydrate:{listing_id}", _MISSING)
+                    known[listing_id] = None
+
+        # Caller order is the AI ranking; preserve it.
+        return [record for lid in wanted if (record := known.get(lid)) is not None]
+
+
+# Sentinel for "asked, and this id resolves to nothing", so that a remembered
+# absence is distinguishable from a cache miss.
+_MISSING = object()
+
+
+def _key(raw: Any) -> str:
+    """Normalise a listing id: hydrate returns them as both int and str."""
+    try:
+        return str(int(raw))
+    except (TypeError, ValueError):
+        return ""
 
 
 def _as_list(raw: Any) -> list[Any]:
@@ -217,5 +262,7 @@ def _as_list(raw: Any) -> list[Any]:
             return inner
         if isinstance(inner, dict):
             return _as_list(inner)
-    return [{"listingId": k, **v} if isinstance(v, dict) else {"listingId": k, "explanation": v}
-            for k, v in raw.items()]
+    return [
+        {"listingId": k, **v} if isinstance(v, dict) else {"listingId": k, "explanation": v}
+        for k, v in raw.items()
+    ]

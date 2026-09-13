@@ -36,9 +36,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
-
 from gemini_act.config import get_settings
+
+from . import throttle
 
 logger = logging.getLogger(__name__)
 
@@ -439,30 +439,24 @@ class VisualFindings:
 
 
 def _download(urls: list[str], limit: int) -> list[tuple[bytes, str]]:
-    """Fetch the gallery in parallel. One unreachable photo must not lose the set."""
+    """Fetch the gallery. One unreachable photo must not lose the set.
+
+    Through `throttle`, which paces and memoises: the same photographs are
+    wanted again by the contact sheet and by the PDF, and each used to fetch
+    its own copy -- eight connections at a time, a fresh TLS handshake per
+    photograph. That is what the portal's anti-bot page objected to. The pool
+    here now only overlaps the waiting; `throttle` caps how many calls are
+    actually in flight across the whole process.
+    """
     wanted = urls[:limit]
+    if not wanted:
+        return []
 
     def one(url: str) -> tuple[bytes, str] | None:
-        try:
-            with httpx.Client(timeout=30, headers=HEADERS, follow_redirects=True) as http:
-                r = http.get(url)
-            if r.status_code != 200 or not r.content:
-                return None
-            mime = (r.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
-            if not mime.startswith("image/"):
-                return None
-            return r.content, mime
-        except httpx.HTTPError:
-            return None
+        return throttle.fetch_image(url, HEADERS)
 
-    out: list[tuple[bytes, str]] = []
-    if not wanted:
-        return out
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        for result in pool.map(one, wanted):
-            if result is not None:
-                out.append(result)
-    return out
+    with concurrent.futures.ThreadPoolExecutor(max_workers=throttle.MAX_PARALLEL) as pool:
+        return [result for result in pool.map(one, wanted) if result is not None]
 
 
 def _facts(subject: dict[str, Any]) -> str:

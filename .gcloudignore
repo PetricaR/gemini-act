@@ -6,3 +6,13 @@ deepseek-harness/
 web/node_modules/
 .uv_cache/
 reports/
+
+# The dev UI writes its local session/artifact store here. Never wanted in an
+# image: the deployed UI uses memory:// sessions and a GCS artifact service.
+agents/*/.adk/
+
+# Uploaded to the Cloud Build staging bucket otherwise — .dockerignore keeps it
+# out of the image, but not out of the upload. Cloud Run gets these as env vars.
+.env
+.env.*
+!.env.example

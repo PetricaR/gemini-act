@@ -1,4 +1,4 @@
-.PHONY: help install install-obscura local dev serve tunnel test lint fmt setup deploy
+.PHONY: help install install-obscura local dev serve tunnel test lint fmt setup deploy deploy-adk-ui
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -35,3 +35,6 @@ setup:  ## One-time Google Cloud setup
 
 deploy:  ## Build and deploy to Cloud Run
 	./deploy/deploy_cloud_run.sh
+
+deploy-adk-ui:  ## Deploy the ADK dev web UI to Cloud Run (IAP-locked)
+	./deploy/adk_ui/deploy_cloud_run.sh
