@@ -29,3 +29,8 @@ sessions.db
 .DS_Store
 web/node_modules/
 reports/raport-complet-demo-aviatiei-park.pdf
+
+# Upstream source checkouts kept locally for reference only. Never part of the
+# build: deploy/dsh/Dockerfile installs dsh from npm, and gcloud builds submit
+# uploads this whole directory as the build context (318MB / ~11.7k files).
+deepseek-harness/

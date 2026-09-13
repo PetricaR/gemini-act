@@ -10,13 +10,19 @@
 #
 # Replaces the Hermes attempt (../hermes/), which could not work on Cloud Run:
 # Hermes stores sessions in SQLite and s6-log chmods its logs, and GCS FUSE
-# refuses both with EPERM. dsh writes YAML, so a bucket mount is enough.
+# refuses both with EPERM. dsh's default bundle uses storage-json rather than
+# storage-sqlite, so it avoids the SQLite half — but NOT the chmod half: it
+# refuses to boot unless .credentials.yaml is owner-only. That is why the volume
+# below sets mount-options rather than taking the GCS FUSE defaults.
 #
 #   - max-instances=1: dsh has no cross-process coordination and two instances
 #     would write the same YAML in the bucket concurrently.
-#   - IAP is the ONLY gate. The dsh web server has no authentication of its own
-#     (packages/host/webserver) — no token, no password. Anyone who passes IAP
-#     gets a fully tool-enabled agent, so keep the allowlist short.
+#   - IAP is the EFFECTIVE sole gate. dsh does have auth of its own — a launch
+#     token, regenerated per process (an in-memory Map in
+#     packages/client/connection/src/browser-auth.ts) — but entrypoint.sh reads
+#     that token and has nginx hand it to every caller, so it stops being an
+#     independent control. Anyone IAP admits gets a fully tool-enabled agent
+#     that can execute code. Keep the allowlist to the people you mean.
 #
 # Prerequisites — create these secrets first (values from ../../.env):
 #
@@ -41,6 +47,11 @@ REGION="${REGION:-europe-west1}"
 SERVICE="${SERVICE:-dsh}"
 BUCKET="${BUCKET:-dsh-data-428056592625}"
 IAP_USER="${IAP_USER:-petrica.radan@formare.ai}"
+# Authorities dsh accepts on its /api Host/Origin fence. Both hostnames this
+# service answers on; without them every /api call is refused 403 behind the
+# proxy. Comma-separated, which is why the --set-env-vars below uses gcloud's
+# ^@^ custom delimiter — a comma there would start a second variable.
+TRUSTED_HOSTS="${TRUSTED_HOSTS:-dsh-428056592625.europe-west1.run.app,dsh-dyeutedtjq-ew.a.run.app}"
 REPO="dsh"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/dsh:latest"
 
@@ -103,6 +114,11 @@ for _secret in dsh-gemini-key dsh-maps-key dsh-targetare-key; do
 done
 
 echo "==> deploying"
+# On the volume's mount-options below: these are not tuning. GCS FUSE
+# synthesizes POSIX modes from mount flags (the objects carry no real mode) and
+# defaults to file-mode=666. dsh then refuses to boot, because credentials-local
+# asserts .credentials.yaml is owner-only and cannot chmod it — GCS FUSE rejects
+# chmod outright. uid/gid=0 match the container user so ownership agrees too.
 gcloud run deploy "${SERVICE}" \
   --image="${IMAGE}" \
   --region="${REGION}" \
@@ -115,10 +131,10 @@ gcloud run deploy "${SERVICE}" \
   --no-cpu-throttling \
   --timeout=3600 \
   --port=8080 \
-  --add-volume=name=data,type=cloud-storage,bucket="${BUCKET}" \
+  --add-volume="name=data,type=cloud-storage,bucket=${BUCKET},mount-options=uid=0;gid=0;file-mode=600;dir-mode=700" \
   --add-volume-mount=volume=data,mount-path=/opt/data \
   --set-secrets=GEMINI_API_KEY=dsh-gemini-key:latest,GEMINI_ACT_MAPS_API_KEY=dsh-maps-key:latest,GEMINI_ACT_TARGETARE_API_KEY=dsh-targetare-key:latest \
-  --set-env-vars=GEMINI_ACT_IMOBILIARE_SESSION_ID=cloudrun
+  --set-env-vars="^@^GEMINI_ACT_IMOBILIARE_SESSION_ID=cloudrun@DSH_TRUSTED_HOSTS=${TRUSTED_HOSTS}"
 
 echo "==> granting IAP service agent invoker on the service"
 gcloud run services add-iam-policy-binding "${SERVICE}" \
