@@ -25,6 +25,7 @@ def _listing(**overrides):
 
 # -- The ladder -----------------------------------------------------------
 
+
 def test_ladder_is_monotonic():
     """Opening < target < ceiling < walk-away, or the ladder is not a ladder."""
     scara = negociere.construieste_scara(179_000, 154_000)
@@ -68,7 +69,10 @@ def test_no_valuation_means_no_ladder():
 
 def test_budget_caps_the_walk_away_below_the_value():
     scara = negociere.construieste_scara(
-        179_000, 154_000, buget_total_max=170_000, costuri_conexe=12_000,
+        179_000,
+        154_000,
+        buget_total_max=170_000,
+        costuri_conexe=12_000,
         deviz_renovare=20_000,
     )
     assert scara.limitat_de_buget is True
@@ -85,6 +89,7 @@ def test_concessions_shrink():
 
 
 # -- Seller profile -------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     ("suprascrieri", "cod"),
@@ -109,6 +114,7 @@ def test_profile_without_signals_is_not_the_most_exploitable_one():
 
 
 # -- Levers and red flags -------------------------------------------------
+
 
 def test_levers_match_findings_regardless_of_diacritics():
     cu_diacritice = negociere.parghii_din_constatari(["Instalație electrică pe aluminiu"])
@@ -144,6 +150,7 @@ def test_no_findings_means_no_invented_defects():
 
 
 # -- Provenance -----------------------------------------------------------
+
 
 def test_every_figure_carries_its_qualification():
     """A market convention rendered like a measurement is worse than no number."""
@@ -181,6 +188,7 @@ def test_decision_rule_quotes_the_ladder():
 
 # -- What reaches the model's context -------------------------------------
 
+
 def test_compact_strategy_drops_the_prose_but_keeps_the_numbers():
     """Three draft offers and three checklists belong in the report, not in every
     valuation's return value."""
@@ -203,3 +211,86 @@ def test_compact_strategy_passes_an_unavailable_plan_through_unchanged():
 
     plan = negociere.plan(_listing(), None)
     assert _strategie_pe_scurt(plan) == plan
+
+
+# -- the seismic flag, once the register has actually been queried --------
+
+
+def _constatare(clasa="RsI", concludent=True, **kw):
+    """The shape `risc_seismic.constatare` returns, as the flags consume it."""
+    baza = {
+        "verificat": True,
+        "gasit": True,
+        "concludent": concludent,
+        "clasa_risc": clasa if concludent else None,
+        "eticheta": f"Clasa {clasa}" if concludent else None,
+        "adresa_registru": "Strada ACADEMIEI nr. 15",
+        "an_expertiza": 1998,
+        "expert_tehnic": "Ion VARSA",
+        "discount_orientativ_pct": [25, 45] if concludent else None,
+        "explicatie": "Risc ridicat de prăbușire.",
+        "consecinte": ["Băncile refuză creditul."],
+        "rezumat": "Clasa RsI — Strada ACADEMIEI nr. 15",
+    }
+    baza.update(kw)
+    return baza
+
+
+def test_registrul_inlocuieste_verificarea_datorata_cu_faptul():
+    steaguri = negociere.steaguri_rosii(_listing(year_built=1972), risc_seismic=_constatare("RsI"))
+    assert not any("1978" in x.problema for x in steaguri), "check-due flag must stand down"
+
+    seismic = [x for x in steaguri if "AMCCRS" in x.problema]
+    assert len(seismic) == 1
+    assert seismic[0].calificare == "FAPT"
+    # RsI is the one class that can make the purchase itself the wrong call.
+    assert seismic[0].abandon is True
+    assert "25" in seismic[0].reducere
+
+
+def test_o_cladire_consolidata_nu_mai_primeste_steag_desi_e_veche():
+    """The regression the year-only rule produced: 1935 + consolidated + a flag."""
+    steaguri = negociere.steaguri_rosii(
+        _listing(year_built=1935), risc_seismic=_constatare("CONSOLIDAT")
+    )
+    assert not any("1978" in x.problema for x in steaguri)
+    assert not any("AMCCRS" in x.problema for x in steaguri)
+
+
+@pytest.mark.parametrize("clasa", ["RsIV", "NEINCADRAT"])
+def test_clasele_fara_impact_nu_ridica_steag(clasa):
+    steaguri = negociere.steaguri_rosii(_listing(year_built=1960), risc_seismic=_constatare(clasa))
+    assert not any("AMCCRS" in x.problema for x in steaguri)
+
+
+def test_rsii_ridica_steag_dar_nu_cere_abandon():
+    steaguri = negociere.steaguri_rosii(_listing(year_built=1969), risc_seismic=_constatare("RsII"))
+    seismic = [x for x in steaguri if "AMCCRS" in x.problema]
+    assert seismic and seismic[0].abandon is False
+
+
+def test_o_potrivire_neconcludenta_lasa_verificarea_in_picioare():
+    """A street-level match must not be dressed up as this building's class."""
+    steaguri = negociere.steaguri_rosii(
+        _listing(year_built=1972), risc_seismic=_constatare(concludent=False)
+    )
+    assert any("1978" in x.problema for x in steaguri)
+    assert not any("AMCCRS" in x.problema for x in steaguri)
+
+
+def test_checklistul_raporteaza_raspunsul_nu_sarcina():
+    fara = negociere.verificari(_listing(year_built=1972))
+    assert any("AMCCRS" in x and "Verificat" not in x for x in fara["structurale"])
+
+    cu = negociere.verificari(_listing(year_built=1972), risc_seismic=_constatare("RsI"))
+    linii = [x for x in cu["structurale"] if "AMCCRS" in x]
+    assert len(linii) == 1
+    assert linii[0].startswith("Verificat în registrul AMCCRS")
+    assert "Strada ACADEMIEI nr. 15" in linii[0]
+
+
+def test_planul_duce_constatarea_pana_la_steaguri_si_checklist():
+    plan = negociere.plan(_listing(year_built=1972), 154_000, risc_seismic=_constatare("RsI"))
+    # `SteagRosu.as_dict` publishes `problema` under the key "risc".
+    assert any("AMCCRS" in x["risc"] for x in plan["steaguri_rosii"])
+    assert any("Verificat în registrul AMCCRS" in x for x in plan["verificari"]["structurale"])

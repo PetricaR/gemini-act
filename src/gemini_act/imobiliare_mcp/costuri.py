@@ -93,8 +93,7 @@ class Post:
             "suportat_de": self.suportat_de,
             "calificare": self.calificare,
             "provenienta": (
-                "indisponibil" if self.minim is None
-                else CALIFICARI.get(self.calificare, "estimat")
+                "indisponibil" if self.minim is None else CALIFICARI.get(self.calificare, "estimat")
             ),
             "motiv_indisponibil": self.motiv_indisponibil,
         }
@@ -280,8 +279,9 @@ def costuri_detinere(
         "total_anual_maxim_eur": round(sum(x.maxim or 0 for x in cunoscute)) or None,
         "suprafata_mp": suprafata_mp,
         "motiv": (
-            None if cunoscute else
-            "Costurile recurente se stabilesc din listele de plată ale asociației și din "
+            None
+            if cunoscute
+            else "Costurile recurente se stabilesc din listele de plată ale asociației și din "
             "certificatul fiscal — documente care nu se pot deduce din anunț."
         ),
     }
@@ -312,8 +312,13 @@ def buget_consolidat(
         pret_eur, prin_agentie=prin_agentie, cu_credit=cu_credit, curs=curs
     )
     posturi = [
-        Post("Preț de achiziție", pret_eur, pret_eur, "Prețul negociat al imobilului",
-             calificare="FAPT"),
+        Post(
+            "Preț de achiziție",
+            pret_eur,
+            pret_eur,
+            "Prețul negociat al imobilului",
+            calificare="FAPT",
+        ),
         Post(
             "Taxe de transfer și notariale",
             tranzactie["total_minim_eur"],
@@ -323,11 +328,24 @@ def buget_consolidat(
         ),
     ]
 
-    if deviz_renovare_eur:
+    # `is not None`, not a truth test: a deviz of zero is the inspection saying
+    # it found nothing to repair, and it used to be indistinguishable from
+    # having no inspection at all -- both fell through to the generic band
+    # below. On a move-in-ready flat that silently added ~30.000 EUR of
+    # renovation to a budget the walk-away threshold is computed from.
+    if deviz_renovare_eur is not None:
         posturi.append(
-            Post("Renovare (deviz aplicat)", deviz_renovare_eur, deviz_renovare_eur,
-                 "Deviz rezultat din defectele constatate la inspecția vizuală",
-                 calificare="ESTIMARE")
+            Post(
+                "Renovare (deviz aplicat)",
+                deviz_renovare_eur,
+                deviz_renovare_eur,
+                (
+                    "Inspecția vizuală nu a identificat defecte care să impună lucrări"
+                    if not deviz_renovare_eur
+                    else "Deviz rezultat din defectele constatate la inspecția vizuală"
+                ),
+                calificare="ESTIMARE",
+            )
         )
     elif suprafata_mp:
         posturi.append(
@@ -341,6 +359,10 @@ def buget_consolidat(
             )
         )
 
+    # Off for a flat sold furnished: the furniture is already inside the asking
+    # price, and counting it again overstates the budget by a room's worth per
+    # room. The caller knows which it is -- `anevar.is_furnished` reads it off
+    # the listing -- so this stays a decision passed in, not one guessed here.
     if include_mobilare and camere:
         posturi.append(
             Post(
@@ -354,15 +376,23 @@ def buget_consolidat(
         )
 
     posturi.append(
-        Post("Fonduri de asociație și racorduri", FONDURI_ASOCIATIE_EUR[0],
-             FONDURI_ASOCIATIE_EUR[1], "Fond de rulment, fond de reparații, actualizare contoare",
-             calificare="ESTIMARE")
+        Post(
+            "Fonduri de asociație și racorduri",
+            FONDURI_ASOCIATIE_EUR[0],
+            FONDURI_ASOCIATIE_EUR[1],
+            "Fond de rulment, fond de reparații, actualizare contoare",
+            calificare="ESTIMARE",
+        )
     )
     if rezerva_eur:
         posturi.append(
-            Post("Fond pentru neprevăzute", rezerva_eur, rezerva_eur,
-                 "Rezervă recomandată pentru cheltuieli care apar după preluare",
-                 calificare="ESTIMARE")
+            Post(
+                "Fond pentru neprevăzute",
+                rezerva_eur,
+                rezerva_eur,
+                "Rezervă recomandată pentru cheltuieli care apar după preluare",
+                calificare="ESTIMARE",
+            )
         )
 
     minim = sum(x.minim or 0 for x in posturi)

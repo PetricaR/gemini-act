@@ -86,3 +86,30 @@ def test_every_post_states_its_legal_or_market_basis():
     for post in buget["posturi"] + buget["tranzactionare"]["posturi"]:
         assert post["temei"], f"{post['componenta']} nu declară pe ce se bazează"
         assert post["calificare"] in {"FAPT", "ESTIMARE"}
+
+
+def test_a_repair_estimate_of_zero_is_a_finding_not_a_missing_value():
+    # The visual inspection concluding "nothing to repair" used to be
+    # indistinguishable from having no inspection at all: both fell through to
+    # the generic 350-500 EUR/mp band, which on a move-in-ready 70 sqm flat
+    # added ~30.000 EUR to a budget the walk-away threshold is computed from.
+    zero = costuri.buget_consolidat(209_000, 70.0, 3, deviz_renovare_eur=0)
+    etichete = [p["componenta"] for p in zero["posturi"]]
+    assert "Renovare capitală (dacă este necesară)" not in etichete
+    linie = next(p for p in zero["posturi"] if p["componenta"] == "Renovare (deviz aplicat)")
+    assert linie["mediu_eur"] == 0
+    assert "nu a identificat defecte" in linie["temei"]
+
+    fara_inspectie = costuri.buget_consolidat(209_000, 70.0, 3, deviz_renovare_eur=None)
+    assert "Renovare capitală (dacă este necesară)" in [
+        p["componenta"] for p in fara_inspectie["posturi"]
+    ]
+    assert fara_inspectie["costuri_conexe_eur"] > zero["costuri_conexe_eur"]
+
+
+def test_a_furnished_flat_is_not_budgeted_to_be_furnished_again():
+    # The furniture is already inside the asking price.
+    mobilat = costuri.buget_consolidat(209_000, 70.0, 3, include_mobilare=False)
+    assert "Mobilare și electrocasnice" not in [p["componenta"] for p in mobilat["posturi"]]
+    nemobilat = costuri.buget_consolidat(209_000, 70.0, 3, include_mobilare=True)
+    assert nemobilat["costuri_conexe_eur"] - mobilat["costuri_conexe_eur"] > 15_000

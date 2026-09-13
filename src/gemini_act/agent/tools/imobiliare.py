@@ -81,6 +81,25 @@ def _failure(action: str, exc: BaseException) -> dict[str, Any]:
     }
 
 
+def _imo360_disabled() -> dict[str, Any]:
+    return {
+        "status": "error",
+        "error_message": (
+            "The imo360 source is disabled on this deployment (GEMINI_ACT_IMO360_ENABLED=false)."
+        ),
+    }
+
+
+def _imoradar_disabled() -> dict[str, Any]:
+    return {
+        "status": "error",
+        "error_message": (
+            "The imoradar24 source is disabled on this deployment "
+            "(GEMINI_ACT_IMORADAR_ENABLED=false)."
+        ),
+    }
+
+
 def _disabled() -> dict[str, Any]:
     return {
         "status": "error",
@@ -987,9 +1006,406 @@ async def analizeaza_electrocasnice_si_defecte_finisaje(
     return {"status": "success", **result}
 
 
+async def verifica_risc_seismic(
+    adresa_sau_identificator: str,
+    numar: str | None = None,
+    sector: str | None = None,
+    limita: int = 5,
+) -> dict[str, Any]:
+    """Verifică dacă un imobil din București figurează în registrul AMCCRS de risc seismic
+    („bulina roșie”) și ce înseamnă încadrarea pentru preț, creditare și asigurare.
+
+    Returnează clasa de risc (RsI–RsIV), categoria de urgență (U1–U3), dacă imobilul a fost
+    deja consolidat, anul și autorul expertizei tehnice, plus impactul orientativ asupra
+    prețului și consecințele practice (bancă, asigurare, obligații legale).
+
+    Clasa RsI este cel mai mare discount ascuns al unui apartament bucureștean: majoritatea
+    băncilor refuză creditul, iar proprietarul are obligația legală de a consolida — nimic
+    din toate astea nu apare în anunț.
+
+    Atenție: absența din registru NU înseamnă că imobilul e sigur — lista cuprinde doar
+    clădirile expertizate tehnic.
+
+    Args:
+        adresa_sau_identificator: Adresă din București („Strada Academiei 15, Sector 1”) sau
+            id/URL de anunț imobiliare.ro, caz în care adresa se ia din anunț.
+        numar: Numărul poștal, dacă nu e deja în adresă.
+        sector: Sectorul („Sector 3”), pentru dezambiguizare.
+        limita: Număr maxim de potriviri returnate (implicit 5).
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import verifica_risc_seismic as server_tool
+
+        return server_tool(
+            adresa_sau_identificator=adresa_sau_identificator,
+            numar=numar,
+            sector=sector,
+            limita=limita,
+        )
+
+    try:
+        result = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("AMCCRS seismic risk lookup", exc)
+
+    if error := result.get("error") or result.get("error_message"):
+        return {"status": "error", "error_message": error}
+
+    return {"status": "success", **result}
+
+
+# Extra fields the imo360 records carry that the imobiliare ones do not.
+# Kept short on purpose: the whole record is thousands of tokens across twenty
+# listings, and the model does not need the postcode to rank them.
+_IMO360_EXTRA = (
+    "surface_basis",
+    "property_type",
+    "zone_id",
+    "county",
+    "imo360_score",
+    # Only ever present when the caller asked for the mis-filed listings back;
+    # without it the model would show one as an ordinary bargain.
+    "suspect",
+)
+
+
+def _trim_imo360(listing: dict[str, Any]) -> dict[str, Any]:
+    trimmed = _trim(listing)
+    trimmed |= {k: listing[k] for k in _IMO360_EXTRA if listing.get(k) is not None}
+    return trimmed
+
+
+async def cauta_imo360_zona(
+    zona: str,
+    oras: str | None = None,
+    tranzactie: str = "sale",
+    tip: str | None = None,
+    pret_max: int | None = None,
+    pret_min: int | None = None,
+    camere: int | None = None,
+    suprafata_min: float | None = None,
+    sort: str = "price_per_sqm",
+    limit: int = 15,
+) -> dict[str, Any]:
+    """Search Romanian property listings by zone, via imo360. Needs no session.
+
+    Prefer this over cauta_proprietati when the question is about a
+    neighbourhood ("what is on the market in Titan") rather than a description,
+    and whenever the other search reports an expired session — this source
+    needs no browser session and cannot expire. It also covers rentals, which
+    the other search does not.
+
+    Args:
+        zona: Neighbourhood or zone name, e.g. "Titan", "Militari", "Gheorgheni".
+        oras: City or county, when the name is used in several places, e.g.
+            "bucuresti", "cluj".
+        tranzactie: "sale" for properties for sale, "rent" for rentals.
+        tip: Property type — "apartment", "house", "land", "commercial_space"
+            or "office". Leave unset for every type.
+        pret_max: Maximum price in EUR.
+        pret_min: Minimum price in EUR.
+        camere: Exact number of rooms.
+        suprafata_min: Minimum surface in square metres.
+        sort: "price_per_sqm", "price", "price_desc", "surface", "newest" or
+            "year_built".
+        limit: Maximum listings to return.
+
+    Returns:
+        A dict with "status", and on success "listings", the zones the name
+        resolved to, "oferta_totala" — how many properties are actually on the
+        market there, or null when the upstream count is capped — and
+        "excluse_neconforme", how many listings filed under "sale" were dropped
+        because they are not sales of the whole property (rental ads, undivided
+        shares). Mention that count if it is large relative to the results.
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+    if not settings.imo360_enabled:
+        return _imo360_disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import Filters, cauta_imo360
+
+        return cauta_imo360(
+            zona=zona,
+            oras=oras,
+            tranzactie=tranzactie if tranzactie in ("sale", "rent") else "sale",
+            tip=tip,
+            filtre=Filters(
+                pret_max=pret_max,
+                pret_min=pret_min,
+                camere=camere,
+                suprafata_min=suprafata_min,
+            ),
+            sort=sort,
+            limit=limit,
+        )
+
+    try:
+        result = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("imo360 search", exc)
+    if result.get("status") == "error":
+        return result
+    result["listings"] = [_trim_imo360(listing) for listing in result.get("listings", [])]
+    return result
+
+
+async def puls_piata_zona(
+    zona: str,
+    oras: str | None = None,
+    tip: str = "apartment",
+    camere: int | None = None,
+) -> dict[str, Any]:
+    """Sale and rental sides of one zone, and the gross rental yield between them.
+
+    The only tool here that can answer "what does this zone earn" or "how deep
+    is this market": it reads the asking prices and the rents from the same
+    geography on the same day, and reports how many properties are on the
+    market for sale and for rent.
+
+    The yield is gross — before vacancy, management, tax and maintenance. Say
+    so when reporting it, and report the sample sizes with it: a median drawn
+    from eight listings is not the same claim as one drawn from eighty.
+
+    Args:
+        zona: Neighbourhood or zone name, e.g. "Titan", "Gheorgheni".
+        oras: City or county, to disambiguate the name.
+        tip: Property type the snapshot is about — "apartment", "house",
+            "land", "commercial_space" or "office".
+        camere: Restrict the snapshot to a room count, e.g. 2.
+
+    Returns:
+        A dict with "status", and on success the sale and rent price
+        distributions, the supply counts, "gross_yield_pct", and the sample
+        sizes behind them; on error an "error_message".
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+    if not settings.imo360_enabled:
+        return _imo360_disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import puls_piata
+
+        return puls_piata(zona=zona, oras=oras, tip=tip, camere=camere)
+
+    try:
+        return await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Market pulse", exc)
+
+
+async def detalii_imo360_anunt(id_anunt: str) -> dict[str, Any]:
+    """Full record for one imo360 listing, with the whole photo gallery.
+
+    Search results carry one thumbnail; this returns the rest, plus the source
+    portal's own attributes (heating, building material, windows, lift,
+    primary or secondary market) where the upstream ad published them.
+
+    Args:
+        id_anunt: An imo360 listing id, from a cauta_imo360_zona result.
+
+    Returns:
+        A dict with "status", and on success "listing"; on error an
+        "error_message".
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+    if not settings.imo360_enabled:
+        return _imo360_disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import detalii_imo360
+
+        return detalii_imo360(id_anunt=id_anunt)
+
+    try:
+        return await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("imo360 listing details", exc)
+
+
+# Extra fields only the aggregator can fill. `sources` is the expensive one to
+# leave out and the expensive one to include whole: it is what proves a flat is
+# advertised at two prices, and it is a nested list per listing. Trimmed to the
+# three fields that carry the argument.
+_IMORADAR_EXTRA = (
+    "source_portal",
+    "source_count",
+    "price_spread_pct",
+    "price_spread_scope",
+    "days_on_imoradar",
+    "first_posted",
+    "old_price_eur",
+    "price_drop_pct",
+    "expired",
+    "suspect",
+)
+
+
+def _trim_imoradar(listing: dict[str, Any]) -> dict[str, Any]:
+    trimmed = _trim(listing)
+    trimmed |= {k: listing[k] for k in _IMORADAR_EXTRA if listing.get(k) is not None}
+    # Only where there is actually a divergence to show; one ad on one portal
+    # is the common case and its `sources` entry repeats the record.
+    if listing.get("source_count", 0) > 1:
+        trimmed["sources"] = [
+            {k: s[k] for k in ("portal", "price_eur", "posted", "seller_type") if s.get(k)}
+            for s in listing.get("sources") or []
+        ]
+    return trimmed
+
+
+async def cauta_imoradar_agregat(
+    zona: str | None = None,
+    oras: str | None = None,
+    doar_proprietar: bool = False,
+    pret_max: int | None = None,
+    pret_min: int | None = None,
+    camere: int | None = None,
+    suprafata_min: float | None = None,
+    zile_pe_piata_max: int | None = None,
+    sort: str = "price_per_sqm",
+    limit: int = 15,
+) -> dict[str, Any]:
+    """Search apartments for sale across every major Romanian portal at once.
+
+    imoradar24 aggregates imobiliare.ro, storia.ro, olx.ro, publi24.ro and
+    others into one de-duplicated index, and needs no session. Use it for the
+    two questions the other searches cannot answer:
+
+    * apartments sold **directly by owners** — that segment lives on OLX and
+      Publi24, which the other sources do not index (doar_proprietar=True);
+    * whether a flat is **advertised at more than one price** — where it is on
+      several portals or with several agencies, every ad comes back in
+      "sources" with "price_spread_pct" between them.
+
+    Only argue from a spread when "price_spread_scope" is "cross_seller".
+    "same_seller" usually means several units of one project grouped together,
+    not one flat at several prices.
+
+    Args:
+        zona: Neighbourhood, town or county, e.g. "Titan", "Cluj-Napoca".
+            Leave unset to search the whole country.
+        oras: City or county, when the name is used in several places.
+        doar_proprietar: Only listings advertised directly by owners.
+        pret_max: Maximum price in EUR.
+        pret_min: Minimum price in EUR.
+        camere: Exact number of rooms.
+        suprafata_min: Minimum usable surface in square metres.
+        zile_pe_piata_max: Only listings on the market at most this many days.
+        sort: "price_per_sqm", "price", "price_desc", "surface", "newest" or
+            "year_built".
+        limit: Maximum listings to return.
+
+    Returns:
+        A dict with "status", and on success "listings", "oferta_totala" — how
+        many distinct properties are on the market there — "oferta_proprietari"
+        (how many of those are from owners directly), "portaluri" (the source
+        breakdown) and "excluse_neconforme", listings dropped for carrying a
+        price no sale could be at. Report "days_on_market" as time on the
+        market and not as freshness of the ad: it is the longer of the ad's age
+        on its own portal and its age in this index.
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+    if not settings.imoradar_enabled:
+        return _imoradar_disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import Filters, cauta_imoradar
+
+        return cauta_imoradar(
+            zona=zona,
+            oras=oras,
+            doar_proprietar=doar_proprietar,
+            filtre=Filters(
+                pret_max=pret_max,
+                pret_min=pret_min,
+                camere=camere,
+                suprafata_min=suprafata_min,
+                zile_pe_piata_max=zile_pe_piata_max,
+            ),
+            sort=sort,
+            limit=limit,
+        )
+
+    try:
+        result = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("imoradar24 search", exc)
+    if result.get("status") == "error":
+        return result
+    result["listings"] = [_trim_imoradar(listing) for listing in result.get("listings", [])]
+    return result
+
+
+async def istoric_pret_imoradar_anunt(id_anunt: str) -> dict[str, Any]:
+    """How one listing's asking price has moved since imoradar24 first saw it.
+
+    The strongest negotiation input available here: what the seller has
+    already conceded, how long they have been trying, and how many times they
+    have cut. Use it before strategie_negociere on any imoradar24 listing, and
+    whenever a buyer asks "has this come down" or "how long has it been up".
+
+    Two things you must carry into whatever you say about the answer:
+
+    * If "observat" is false, say the history is unavailable — never that the
+      price held steady. The source answers the same way for a listing it
+      never tracked and for one that does not exist.
+    * "schimbare_pct" is measured only between days that had a single asking
+      price. Where several agencies advertise one flat, a day is a range, and
+      a range narrowing is the dearest ad ending, not a price cut. Those days
+      are counted in "puncte_ambigue"; if that count is most of the history,
+      say the history is not readable rather than quoting a change.
+
+    "zile_de_la_prima_aparitie" is a firmer lower bound on time on the market
+    than the days_on_market of a search result — it reaches back further.
+
+    Args:
+        id_anunt: An imoradar24 listing id, from a cauta_imoradar_agregat
+            result, or a listing url.
+
+    Returns:
+        A dict with "status", and on success "observat" and — when that is
+        true — the first and last sighting, the opening and current asking
+        price, "schimbare_pct", "reduceri" (how many cuts), and the series
+        itself; on error an "error_message".
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+    if not settings.imoradar_enabled:
+        return _imoradar_disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import istoric_pret_imoradar
+
+        return istoric_pret_imoradar(id_anunt=id_anunt)
+
+    try:
+        return await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("imoradar24 price history", exc)
+
+
 IMOBILIARE_TOOLS = [
     cauta_proprietati,
     cauta_imobiliare_obscura,
+    cauta_imo360_zona,
+    cauta_imoradar_agregat,
+    istoric_pret_imoradar_anunt,
+    puls_piata_zona,
+    detalii_imo360_anunt,
     reia_cautare,
     detalii_proprietate,
     statistici_piata,
@@ -1004,5 +1420,6 @@ IMOBILIARE_TOOLS = [
     analizeaza_strada_si_imprejurimi_street_view,
     analizeaza_bonitate_dezvoltator_targetare,
     recenzii_reputatie_google_maps,
+    verifica_risc_seismic,
     genereaza_raport_complet_pdf,
 ]

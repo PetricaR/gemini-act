@@ -31,6 +31,10 @@ _GA4_NULLS = {"not applicable", "0", "", "none"}
 # "mansardă" has no real floor number; normalised to always sort as the top.
 _MANSARDA = 99
 
+# Listing `url`s arrive relative; this is the host they belong to unless the
+# caller says otherwise.
+BASE_URL = "https://www.imobiliare.ro"
+
 
 def _ga4(listing: dict[str, Any]) -> dict[str, Any]:
     return (listing.get("tracking") or {}).get("ga4Item") or {}
@@ -83,8 +87,26 @@ def _floor(label: str | None) -> tuple[int | None, int | None]:
     return floor, int(total.group(1)) if total else None
 
 
-def normalise(listing: dict[str, Any], explanation: dict[str, str] | None = None) -> dict[str, Any]:
-    """Flatten one raw listing into a typed record."""
+def _url(url: str | None, base_url: str) -> str:
+    """Resolve a listing url, which is relative on some sources and not others."""
+    path = url or ""
+    return path if path.startswith(("http://", "https://")) else base_url + path
+
+
+def normalise(
+    listing: dict[str, Any],
+    explanation: dict[str, str] | None = None,
+    *,
+    base_url: str = BASE_URL,
+) -> dict[str, Any]:
+    """Flatten one raw listing into a typed record.
+
+    `base_url` is what a relative `url` is resolved against -- an already
+    absolute one is left alone, which aggregated listings arrive as. It exists
+    because imoradar24.ro runs the same platform and serves listings in this
+    exact shape (see `imoradar.py`), so this function does its parsing too --
+    only the host the listing lives on differs.
+    """
     g = _ga4(listing)
     feats = _features(listing)
 
@@ -120,7 +142,7 @@ def normalise(listing: dict[str, Any], explanation: dict[str, str] | None = None
     record = {
         "id": listing.get("id"),
         "title": listing.get("heading"),
-        "url": "https://www.imobiliare.ro" + (listing.get("url") or ""),
+        "url": _url(listing.get("url"), base_url),
         # money
         "price_eur": int(price) if price else None,
         "price_per_sqm": round(price / surface) if price and surface else None,

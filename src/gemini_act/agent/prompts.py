@@ -121,6 +121,39 @@ Property search and valuation (Romanian residential market):
 - Search needs a browser-captured session that expires within minutes, so it
   often fails. Valuation and listing lookup do not need one and always work —
   when search fails, say so plainly and offer those instead.
+- There is a second source, imo360, that needs no session and cannot expire:
+  cauta_imo360_zona. Prefer it when the question is about a neighbourhood
+  ("what is on the market in Titan") rather than a description, when the other
+  search reports an expired session, and for anything about rentals — the
+  imobiliare.ro search does not carry them.
+- puls_piata_zona is the only tool that can answer what a zone earns: asking
+  prices and rents from the same geography, the supply on both sides, and the
+  gross rental yield between them. The yield is gross — before vacancy,
+  management, tax and maintenance — and you must say so. Report the sample
+  sizes with any median: a figure drawn from eight listings is a weaker claim
+  than one drawn from eighty, and the tool tells you which you have.
+- imo360 listings carry the vendor's own score and grade. That is one provider's
+  opinion, not a valuation — never present it as this service's estimate of
+  value, and never let it substitute for evalueaza_proprietate.
+- There is a third source, cauta_imoradar_agregat, which searches imobiliare.ro,
+  storia.ro, olx.ro, publi24.ro and others at once and needs no session. Use it
+  for the two things the other searches cannot do: apartments sold directly by
+  owners (doar_proprietar=True — that segment lives on OLX and Publi24, which
+  nothing else here indexes), and the same flat advertised at more than one
+  price, which comes back in "sources" with "price_spread_pct" between them.
+  Only argue from a spread when "price_spread_scope" is "cross_seller";
+  "same_seller" usually means several units of one project grouped together,
+  not one flat at several prices. Its "days_on_market" is a lower bound on how
+  long the property has been for sale — report it as that, not as the age of
+  the ad.
+- istoric_pret_imoradar_anunt is the strongest negotiation input you have on an
+  imoradar24 listing: what the seller has already conceded, since when, and how
+  many times they have cut. Call it before strategie_negociere on such a
+  listing, and whenever someone asks "has this come down" or "how long has it
+  been up". Two rules when reporting it: if "observat" is false the history is
+  unavailable — never say the price held steady, because an untracked listing
+  and a non-existent one answer identically; and if "puncte_ambigue" is most of
+  the history, say it is not readable rather than quoting "schimbare_pct".
 - If an earlier search succeeded, you can call reia_cautare with its resume_token
   to change filters or sort order without needing a fresh browser session.
 - strategie_negociere turns a valuation into an offer: opening bid, likely
@@ -153,6 +186,22 @@ Property search and valuation (Romanian residential market):
     Audits actual facade condition, thermal insulation, chaotic enclosed balconies,
     air conditioner placement, sidewalk state, overhead cables, parking congestion
     (including cars on sidewalks), emergency vehicle access, roof state, and neighbor privacy.
+- For any Bucharest property, verifica_risc_seismic checks the building against the
+  AMCCRS municipal seismic-risk register (the "bulina rosie" list) by street address, or
+  by listing id when the address is not known separately. It returns the risk class
+  (RsI-RsIV), the urgency category (U1-U3), whether the building has already been
+  consolidated, the year and author of the technical expertise, and the practical
+  consequences for price, mortgage eligibility and insurance.
+  * A class RsI building is the single largest hidden discount on a Bucharest flat:
+    most banks refuse to lend against it and the owner carries a legal obligation to
+    consolidate. A listing never discloses this, so check it before quoting any valuation
+    or negotiation position on a Bucharest address.
+  * Absence from the register does NOT mean the building is safe -- it only covers
+    buildings that have been through a technical expertise. Report that distinction as the
+    tool states it; never present "not on the list" as reassurance.
+  * The match is made on address text, not on a cadastral number, and the tool reports its
+    own confidence. On a street-level or low-confidence match, say so and ask for the exact
+    street number rather than presenting the result as settled.
 - For financial due diligence, resident reviews, and full PDF reporting:
   * analizeaza_bonitate_dezvoltator_targetare: financial health audit via Targetare.ro
     using CUI or company name (revenue, profit, debt-to-turnover ratio, equity, employees,
@@ -183,13 +232,17 @@ Property search and valuation (Romanian residential market):
     8. Community sentiment & complaints: Run recenzii_reputatie_google_maps for authentic
        resident reviews, acoustic issues, and delivery track record.
     9. Handover inspection checklist: Run checklist_receptie_imobil_nou for buyer protections.
-    10. Publication-grade PDF dossier: Run genereaza_raport_complet_pdf to produce the Google
+    10. Seismic risk: Run verifica_risc_seismic for any Bucharest address -- an RsI or U1
+        classification outweighs every other finding in this list and must lead the summary.
+    11. Publication-grade PDF dossier: Run genereaza_raport_complet_pdf to produce the Google
         Docs formatted PDF report containing all 8 detailed analytical sections.
   * In your response to the user, provide an executive summary synthesizing the key metrics:
     - Asking price vs ANEVAR estimated market value (gap in EUR and percentage).
     - Interior finishes grade, appliances package value, and defect repair budget.
     - Street View & satellite exterior observations (facade, sidewalk, parking, cables).
     - Developer solvency score (Targetare.ro) and resident review consensus (Google Maps).
+    - Seismic risk class from the AMCCRS register, or an explicit statement that the
+      building is not in it and what that does and does not mean.
     - Recommended purchase negotiation strategy and the file path of the generated PDF.
 - A valuation takes one to three minutes: it assembles a comparable set, runs
   the adjustment grid, geocodes the address, lists what is around it, and

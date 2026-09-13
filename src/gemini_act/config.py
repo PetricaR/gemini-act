@@ -375,6 +375,19 @@ class Settings(BaseSettings):
     # Expires after a few minutes, so `cauta` is best-effort and everything that
     # matters (`detalii`, `evaluare`) is built to work without it.
     imobiliare_session_id: str = ""
+    # The imo360 explorer API (`imobiliare_mcp/imo360.py`): a second source,
+    # geographic rather than textual, unauthenticated, and the only one here
+    # carrying rentals — so it is what makes a yield computable at all. Kept on
+    # its own switch because it is a different upstream from imobiliare.ro and
+    # can be closed off independently of it.
+    imo360_enabled: bool = True
+    # imoradar24.ro (`imobiliare_mcp/imoradar.py`): the third source, and the
+    # only aggregator — it indexes imobiliare.ro, storia.ro, olx.ro, publi24.ro
+    # and others at once, which is what reaches the *proprietar* segment (OLX
+    # and Publi24 carry it; nothing else here does) and what makes the same
+    # flat's price on two portals comparable. Its own switch for the same
+    # reason imo360 has one: a separate upstream that can close independently.
+    imoradar_enabled: bool = True
     # Comparables carried into the GEV 630 §54-58 grid. More is not better: the
     # grid weights by similarity anyway, and each one is an extra hydrate row.
     imobiliare_comparables: int = 12

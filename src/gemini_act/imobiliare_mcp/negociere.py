@@ -99,6 +99,7 @@ def context_pret(listat: float | None, estimat: float | None, p: Parametri) -> s
 
 # -- Who is on the other side ---------------------------------------------
 
+
 @dataclass
 class Profil:
     """One seller archetype and the approach it responds to."""
@@ -281,8 +282,11 @@ def profil_vanzator(rec: dict[str, Any], zile_prag: int = 90) -> Profil:
         semnale.append("anunț intermediat de agenție")
     else:
         profil = PROFILE["particular"]
-        semnale.append("anunț de la proprietar particular" if tip == "individual"
-                       else "tip de vânzător nepublicat")
+        semnale.append(
+            "anunț de la proprietar particular"
+            if tip == "individual"
+            else "tip de vânzător nepublicat"
+        )
 
     if zile is not None and profil.cod != "testeaza_piata":
         semnale.append(f"{zile} zile de expunere")
@@ -303,6 +307,7 @@ def profil_vanzator(rec: dict[str, Any], zile_prag: int = 90) -> Profil:
 
 
 # -- Defects that are worth money at the table ----------------------------
+
 
 @dataclass
 class Parghie:
@@ -424,6 +429,7 @@ def parghii_din_constatari(constatari: list[str]) -> list[Parghie]:
 
 # -- Red flags ------------------------------------------------------------
 
+
 @dataclass
 class SteagRosu:
     problema: str
@@ -501,20 +507,77 @@ STEAG_ULTIM_ETAJ = SteagRosu(
 )
 
 
+def _steag_din_registru(constatare: dict[str, Any]) -> SteagRosu | None:
+    """The seismic flag as a fact, once the AMCCRS register has been queried.
+
+    Only for a match the lookup called conclusive. A street-level match leaves
+    `STEAG_SEISMIC` standing instead: "some building on this street is RsI" is
+    not a statement about this flat, and dressing it up as one would put a
+    -25% argument in the buyer's mouth that the seller can demolish.
+    """
+    if not constatare.get("concludent") or not constatare.get("clasa_risc"):
+        return None
+    clasa = constatare["clasa_risc"]
+    if clasa == "CONSOLIDAT":
+        return None  # a consolidated building is the opposite of a red flag
+    if clasa in ("RsIV", "NEINCADRAT"):
+        return None
+
+    interval = constatare.get("discount_orientativ_pct") or []
+    reducere = (
+        f"-{interval[0]}% până la -{interval[1]}% față de piață"
+        if len(interval) == 2 and interval[1]
+        else "impact material asupra prețului"
+    )
+    detalii = [constatare["eticheta"]]
+    if an := constatare.get("an_expertiza"):
+        detalii.append(f"expertiză tehnică {an}")
+    if expert := constatare.get("expert_tehnic"):
+        detalii.append(f"expert {expert}")
+
+    return SteagRosu(
+        problema=f"{constatare['eticheta']} — confirmat în registrul AMCCRS",
+        risc=(
+            f"{constatare.get('explicatie') or ''} " + " ".join(constatare.get("consecinte") or [])
+        ).strip()
+        or "Încadrare confirmată în registrul municipal de risc seismic.",
+        reducere=reducere,
+        masura=(
+            f"Confirmat pentru {constatare.get('adresa_registru')} ({', '.join(detalii)}). "
+            "Se cere copia expertizei tehnice de la AMCCRS și se verifică la bancă "
+            "finanțabilitatea înainte de orice ofertă."
+        ),
+        # RsI is the one classification that can make the purchase itself the
+        # wrong decision rather than merely the wrong price.
+        abandon=clasa == "RsI",
+        calificare="FAPT",
+    )
+
+
 def steaguri_rosii(
     rec: dict[str, Any],
     constatari: list[str] | None = None,
     dezvoltator_sanatos: bool | None = None,
+    risc_seismic: dict[str, Any] | None = None,
 ) -> list[SteagRosu]:
     """Only flags the available evidence actually supports.
 
-    Nothing here asserts a seismic class, a litigation or an unauthorised wall:
-    those require a register nobody has queried. What it asserts is that a
-    check is *due*, which is a claim the listing does support.
+    Nothing here asserts a litigation or an unauthorised wall: those require a
+    register nobody has queried. What it asserts is that a check is *due*,
+    which is a claim the listing does support.
+
+    The seismic class is the exception, and only when `risc_seismic` carries a
+    conclusive answer from `risc_seismic.constatare` -- that register *has* now
+    been queried. Without one, the year-of-construction flag stands as before:
+    a check that is due, not a classification.
     """
     gasite: list[SteagRosu] = []
     an = rec.get("year_built")
-    if an and an < 1978:
+    if risc_seismic and (steag := _steag_din_registru(risc_seismic)):
+        gasite.append(steag)
+    elif risc_seismic and risc_seismic.get("concludent"):
+        pass  # checked, and the register clears it -- no flag to raise
+    elif an and an < 1978:
         gasite.append(STEAG_SEISMIC)
 
     text = _fold(" ".join(c for c in (constatari or []) if c))
@@ -534,6 +597,7 @@ def steaguri_rosii(
 
 
 # -- The ladder -----------------------------------------------------------
+
 
 @dataclass
 class Scara:
@@ -646,8 +710,9 @@ def construieste_scara(
 
     tinta = _rotunjeste(valoare_estimata)
     maxim = _rotunjeste(valoare_estimata * (1 + p.marja_pret_maxim_pct / 100))
-    walk_away = _rotunjeste(valoare_estimata * (1 + p.marja_pret_maxim_pct / 100
-                                                + p.marja_walk_away_pct / 100))
+    walk_away = _rotunjeste(
+        valoare_estimata * (1 + p.marja_pret_maxim_pct / 100 + p.marja_walk_away_pct / 100)
+    )
 
     # A budget caps the walk-away independently of what the flat is worth: the
     # consolidated project has to fit, renovation and fees included.
@@ -691,6 +756,7 @@ def construieste_scara(
 
 def regula_decizionala(s: Scara, moneda: str = "EUR") -> str:
     """The whole strategy compressed into the sentence a buyer says out loud."""
+
     def n(value: float | None) -> str:
         return f"{value:,.0f}".replace(",", ".") if value else "n/a"
 
@@ -800,6 +866,7 @@ def plan(
     costuri_conexe: float | None = None,
     dezvoltator_sanatos: bool | None = None,
     p: Parametri | None = None,
+    risc_seismic: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Everything downstream needs: ladder, counterparty, levers, flags, scripts."""
     p = p or Parametri()
@@ -808,9 +875,7 @@ def plan(
     parghii_active = parghii_din_constatari(constatari)
 
     if deviz_renovare is None and parghii_active:
-        deviz_renovare = sum(
-            (x.reducere_eur[0] + x.reducere_eur[1]) / 2 for x in parghii_active
-        )
+        deviz_renovare = sum((x.reducere_eur[0] + x.reducere_eur[1]) / 2 for x in parghii_active)
 
     scara = construieste_scara(
         rec.get("price_eur"),
@@ -832,7 +897,22 @@ def plan(
             "provenienta": "indisponibil",
         }
 
-    steaguri = steaguri_rosii(rec, constatari, dezvoltator_sanatos)
+    steaguri = steaguri_rosii(rec, constatari, dezvoltator_sanatos, risc_seismic)
+
+    abandon, motiv_abandon = False, None
+    if any(x.abandon for x in steaguri):
+        abandon = True
+        motiv_abandon = next(x.problema for x in steaguri if x.abandon)
+    elif (
+        scara.walk_away is not None
+        and scara.oferta_initiala is not None
+        and scara.walk_away < scara.oferta_initiala
+    ):
+        abandon = True
+        motiv_abandon = (
+            "Bugetul disponibil după taxe și lucrări coboară pragul de abandon sub oferta "
+            "de deschidere: proprietatea nu încape în buget la niciun preț negociabil."
+        )
 
     return {
         "status": "disponibil",
@@ -843,7 +923,8 @@ def plan(
         "profil_vanzator": profil.as_dict(),
         "parghii": [x.as_dict() for x in parghii_active],
         "steaguri_rosii": [x.as_dict() for x in steaguri],
-        "abandon_recomandat": any(x.abandon for x in steaguri),
+        "abandon_recomandat": abandon,
+        "motiv_abandon": motiv_abandon,
         "scripturi": {
             canal: script_oferta(
                 canal,
@@ -855,7 +936,7 @@ def plan(
             )
             for canal in SCRIPTURI
         },
-        "verificari": verificari(rec),
+        "verificari": verificari(rec, risc_seismic),
         "reguli_de_aur": REGULI_DE_AUR,
         "sursa": SURSA_IMPLICITA,
     }
@@ -868,16 +949,14 @@ REGULI_DE_AUR = [
     "cote-părți comune.",
     "Comparabilele se construiesc independent; cele prezentate de agentul vânzătorului nu "
     "sunt o bază de evaluare.",
-    "Oferta fermă se transmite în scris, cu deviz atașat și cu termen de expirare de 48–72 "
-    "de ore.",
+    "Oferta fermă se transmite în scris, cu deviz atașat și cu termen de expirare de 48–72 de ore.",
     "Minimum două vizionări, la ore opuse: una dimineața, una între 18:30 și 20:00.",
     "Vizitarea administratorului asociației înaintea antecontractului: listele de plată "
     "arată starea reală a imobilului.",
     "Clauză suspensivă de finanțare în antecontract, cu restituirea integrală a avansului la "
     "refuzul creditării din motive neimputabile cumpărătorului.",
     "Cumpărătorul suportă taxele de autentificare, deci cumpărătorul alege biroul notarial.",
-    "Instalațiile se testează la sarcină: toate bateriile deschise simultan, ghenele "
-    "inspectate.",
+    "Instalațiile se testează la sarcină: toate bateriile deschise simultan, ghenele inspectate.",
     "Peste pragul de walk-away calculat la rece, tranzacția se abandonează fără excepție.",
 ]
 
@@ -885,8 +964,7 @@ REGULI_DE_AUR = [
 # -- Checks that are due before an offer and before a pre-contract ---------
 
 VERIFICARI_TEHNICE = [
-    "Tabloul electric: siguranțe automate sau patroane vechi? Conductori de cupru sau de "
-    "aluminiu?",
+    "Tabloul electric: siguranțe automate sau patroane vechi? Conductori de cupru sau de aluminiu?",
     "Presiune și debit: toate bateriile deschise simultan, la baie și la bucătărie.",
     "Planeitatea pardoselilor și a buiandrugilor — pante care ar impune șape autonivelante.",
     "Etanșeitatea tâmplăriei: o coală de hârtie prinsă în toc trebuie să opună rezistență.",
@@ -920,19 +998,29 @@ VERIFICARI_STRUCTURALE_VECHI = [
 VERIFICARI_STRUCTURALE_NOI = [
     "Proces-verbal de recepție la terminarea lucrărilor, semnat cu ISC și primăria.",
     "Certificat de atestare a edificării construcției și Cartea Tehnică a Construcției.",
-    "Branșamente definitive la apă, canalizare și energie electrică — nu provizorii de "
-    "șantier.",
+    "Branșamente definitive la apă, canalizare și energie electrică — nu provizorii de șantier.",
 ]
 
 
-def verificari(rec: dict[str, Any]) -> dict[str, list[str]]:
-    """The checklist for this property: technical, legal, and structural by era."""
+def verificari(
+    rec: dict[str, Any], risc_seismic: dict[str, Any] | None = None
+) -> dict[str, list[str]]:
+    """The checklist for this property: technical, legal, and structural by era.
+
+    The AMCCRS line is a task until the register has actually been queried, at
+    which point leaving it on the list would send the buyer to do work that is
+    already done -- so it is rewritten as the answer, conclusive or not.
+    """
     an = rec.get("year_built")
     nou = bool(rec.get("is_new_build")) or (an is not None and an >= 2018)
+    structurale = list(VERIFICARI_STRUCTURALE_NOI if nou else VERIFICARI_STRUCTURALE_VECHI)
+    if risc_seismic and risc_seismic.get("verificat"):
+        raspuns = f"Verificat în registrul AMCCRS: {risc_seismic['rezumat']}"
+        structurale = [raspuns if "AMCCRS" in x else x for x in structurale]
+        if raspuns not in structurale:
+            structurale.insert(0, raspuns)
     return {
         "tehnice": VERIFICARI_TEHNICE,
         "juridice": VERIFICARI_JURIDICE,
-        "structurale": (
-            VERIFICARI_STRUCTURALE_NOI if nou else VERIFICARI_STRUCTURALE_VECHI
-        ),
+        "structurale": structurale,
     }

@@ -3,6 +3,7 @@ import {
   Calculator,
   ChevronDown,
   ChevronUp,
+  ExternalLink,
   Info,
   Scale,
   TrendingDown,
@@ -82,12 +83,30 @@ export default function ValuationMeter({ evaluare, pretTotal, suprafata }) {
                 <tbody>
                   {comparables.map((comparable, index) => (
                     <tr key={comparable.id || comparable.adresa || index}>
-                      <td className="font-semibold text-slate-900">{comparable.adresa}</td>
+                      <td className="font-semibold text-slate-900">
+                        {comparable.url ? (
+                          <a
+                            href={comparable.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-sky-700 hover:text-sky-900 hover:underline"
+                          >
+                            {comparable.adresa || comparable.id}
+                            <ExternalLink className="h-3 w-3 flex-shrink-0" />
+                          </a>
+                        ) : (
+                          comparable.adresa || comparable.id
+                        )}
+                      </td>
                       <td className="font-semibold tabular-nums">{eur(comparable.pret_total || comparable.pret)}</td>
                       <td className="tabular-nums">{sqm(comparable.suprafata_utila || comparable.suprafata)}</td>
                       <td className="tabular-nums">{eurPerSqm(comparable.pret_mp || comparable.pret_mp_eur)}</td>
                       <td className="tabular-nums">
-                        {comparable.distanta_km != null ? `${num(comparable.distanta_km, 2)} km` : '< 1 km'}
+                        {comparable.distanta_km != null ? (
+                          `${num(comparable.distanta_km, 2)} km`
+                        ) : (
+                          <span className="text-slate-400">nepublicat</span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -253,7 +272,24 @@ export default function ValuationMeter({ evaluare, pretTotal, suprafata }) {
                     <React.Fragment key={comparable.id || comparable.adresa || index}>
                       <tr>
                         <td className="font-semibold text-slate-900">
-                          {comparable.adresa}
+                          {comparable.url ? (
+                            <a
+                              href={comparable.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-sky-700 hover:text-sky-900 hover:underline"
+                            >
+                              {comparable.adresa || comparable.id}
+                              <ExternalLink className="h-3 w-3 flex-shrink-0" />
+                            </a>
+                          ) : (
+                            comparable.adresa || comparable.id
+                          )}
+                          {comparable.id && (
+                            <span className="block text-[11px] font-normal text-slate-400">
+                              anunț {comparable.id}
+                            </span>
+                          )}
                           {comparable.data_tranzactiei && (
                             <span className="block text-[11px] font-normal text-slate-500">
                               tranzacționat {comparable.data_tranzactiei}
@@ -270,9 +306,11 @@ export default function ValuationMeter({ evaluare, pretTotal, suprafata }) {
                           {eurPerSqm(comparable.pret_mp || comparable.pret_mp_eur)}
                         </td>
                         <td className="tabular-nums">
-                          {comparable.distanta_km != null
-                            ? `${num(comparable.distanta_km, 2)} km`
-                            : '< 1 km'}
+                          {comparable.distanta_km != null ? (
+                            `${num(comparable.distanta_km, 2)} km`
+                          ) : (
+                            <span className="text-slate-400">nepublicat</span>
+                          )}
                         </td>
                         <td
                           className={`font-semibold tabular-nums ${

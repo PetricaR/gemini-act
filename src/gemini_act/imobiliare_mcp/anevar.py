@@ -119,19 +119,64 @@ def is_furnished(rec: dict[str, Any], slug_hint: bool = False) -> bool:
     return bool(_FURNISHED.search(text)) or slug_hint
 
 
+def _completeness(rec: dict[str, Any]) -> int:
+    """How much a record actually says -- used to pick a survivor among duplicates."""
+    return sum(
+        1
+        for field_name in ("year_built", "floor", "floors_total", "metro_distance_m",
+                           "days_on_market", "seller_type", "description", "image_urls")
+        if rec.get(field_name) not in (None, "", [])
+    )
+
+
 def dedupe(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """The portal carries the same flat twice under different area labels.
 
     A duplicate in a comparison grid is a second vote for one price, so it has
     to go before anything is averaged.
+
+    Two passes. The first keys on the full signature. The second catches the
+    case the first misses and which the portal actually produces: the same flat
+    relisted with a field left blank, so the signatures differ on a `None`.
+    Records only merge when the fields they *both* publish agree -- two genuinely
+    different flats at the same price and surface stay separate as soon as one
+    names a different year or floor.
+
+    Among duplicates the survivor is the record that says the most, not the
+    first one seen: a relist stripped of its year and photographs should not
+    displace the complete listing of the same flat.
     """
-    seen: dict[tuple, dict[str, Any]] = {}
+    def better(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
+        return _completeness(candidate) > _completeness(current)
+
+    exact: dict[tuple, dict[str, Any]] = {}
     for r in records:
         key = (r.get("price_eur"), r.get("surface_sqm"), r.get("year_built"), r.get("floor"))
         if None in key[:2]:
             continue
-        seen.setdefault(key, r)
-    return list(seen.values())
+        if key not in exact or better(r, exact[key]):
+            exact[key] = r
+
+    grupe: dict[tuple, list[dict[str, Any]]] = {}
+    for r in exact.values():
+        grupe.setdefault((r.get("price_eur"), r.get("surface_sqm")), []).append(r)
+
+    out: list[dict[str, Any]] = []
+    for candidati in grupe.values():
+        pastrate: list[dict[str, Any]] = []
+        for r in sorted(candidati, key=_completeness, reverse=True):
+            compatibil = any(
+                all(
+                    r.get(camp) == deja.get(camp)
+                    for camp in ("year_built", "floor")
+                    if r.get(camp) is not None and deja.get(camp) is not None
+                )
+                for deja in pastrate
+            )
+            if not compatibil:
+                pastrate.append(r)
+        out.extend(pastrate)
+    return out
 
 
 # -- Adjustments derived from the data (GEV 630 §58) ----------------------

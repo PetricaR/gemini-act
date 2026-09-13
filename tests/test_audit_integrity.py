@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+from pathlib import Path
 
 import pytest
 
@@ -505,3 +506,168 @@ def test_dossier_carries_the_repair_estimate_into_the_budget():
     etichete = [p["componenta"] for p in date["buget_consolidat"]["posturi"]]
     assert "Renovare (deviz aplicat)" in etichete
     assert date["strategie_negociere"]["parghii"]
+
+
+def test_nothing_the_strategy_produces_goes_unrendered(tmp_path):
+    """Every key of the plan reaches a reader, in the PDF or in the web UI.
+
+    `reguli_de_aur` and the top-level `abandon_recomandat` were produced and
+    rendered nowhere — payload that costs tokens and delivers nothing.
+    """
+    import subprocess
+
+    from gemini_act.imobiliare_mcp import negociere
+
+    plan = negociere.plan(
+        {"price_eur": 179_000, "year_built": 1982, "seller_type": "individual"},
+        154_000,
+        constatari=["instalatie electrica pe aluminiu"],
+    )
+    web = subprocess.run(
+        ["grep", "-rho", "-E", r"strategie\.[a-z_]+", "web/src"],
+        capture_output=True, text=True,
+    ).stdout
+
+    date = {
+        "titlu": "Apartament",
+        "pret_total": 179_000,
+        "suprafata_utila": 71.5,
+        "camere": 3,
+        "an_constructie": 1982,
+        "evaluare_anevar": {"disponibil": True, "valoare_estimata_piata": 154_000},
+    }
+    server._completeaza_strategie(date, None)
+    pdf = _povestea_pdf(date, tmp_path)
+
+    # Plumbing, not content: these say whether the block renders at all.
+    tehnice = {"status", "disponibil", "provenienta", "motiv", "motiv_abandon"}
+    for cheie in set(plan) - tehnice:
+        randat = f"strategie.{cheie}" in web or cheie == "scara" and "ladder" in web
+        assert randat or cheie in ("sursa",), (
+            f"{cheie!r} este produs de negociere.plan dar nu îl citește nimeni din web"
+        )
+
+    assert "Reguli de Aur" in pdf
+
+
+def test_abandon_is_provable_or_absent():
+    """A flag that can never be true is worse than no flag.
+
+    No red flag may assert a seismic class or a litigation nobody looked up, so
+    the one abandon condition this pipeline can prove is arithmetic: a budget
+    ceiling below the offer one would open at.
+    """
+    from gemini_act.imobiliare_mcp import negociere
+
+    rec = {"price_eur": 179_000, "year_built": 1982, "seller_type": "individual"}
+    normal = negociere.plan(rec, 154_000)
+    assert normal["abandon_recomandat"] is False
+    assert normal["motiv_abandon"] is None
+
+    imposibil = negociere.plan(rec, 154_000, buget_total_max=150_000, costuri_conexe=20_000)
+    assert imposibil["abandon_recomandat"] is True
+    assert "nu încape în buget" in imposibil["motiv_abandon"]
+
+
+def test_pdf_survives_a_valuation_without_an_adjustment_percentage(tmp_path):
+    """A margin in euros with no percentage crashed the whole PDF build."""
+    date = {
+        "titlu": "Apartament",
+        "pret_total": 179_000,
+        "suprafata_utila": 71.5,
+        "camere": 3,
+        "an_constructie": 1982,
+        "evaluare_anevar": {
+            "disponibil": True,
+            "valoare_estimata_piata": 154_000,
+            "marja_negociere_eur": 25_000,
+            # no `ajustare_recomandata_procent`, no `diferenta_pct`
+        },
+    }
+    server._completeaza_strategie(date, None)
+    text = _povestea_pdf(date, tmp_path)
+    assert "peste valoarea estimată" in text
+
+
+# -- Comparables must be checkable and unique -----------------------------
+
+def test_every_comparable_carries_its_listing_url():
+    """A comparable a buyer cannot open is a number they cannot verify."""
+    comparabila = server._comparabila_dict(
+        {
+            "id": 275807510,
+            "url": "https://www.imobiliare.ro/oferta/apartament-275807510",
+            "price_eur": 140_000,
+            "surface_sqm": 58,
+            "price_per_sqm": 2413,
+        }
+    )
+    assert comparabila["url"].endswith("275807510")
+    assert comparabila["id"] == "275807510"
+
+
+def test_web_table_links_each_comparable_and_never_invents_a_distance():
+    sursa = Path("web/src/components/ValuationMeter.jsx").read_text(encoding="utf-8")
+    assert "href={comparable.url}" in sursa, "tabelul nu leagă comparabilele la anunț"
+    assert "'< 1 km'" not in sursa, "distanța nepublicată e din nou completată cu o valoare"
+    assert "nepublicat" in sursa
+
+
+def test_duplicate_relisting_with_blank_fields_is_removed():
+    """The portal relists the same flat with a field left blank."""
+    from gemini_act.imobiliare_mcp.anevar import dedupe
+
+    inregistrari = [
+        {"id": "275969177", "price_eur": 108_000, "surface_sqm": 60, "year_built": 1969,
+         "floor": 2, "description": "complet", "image_urls": ["a"]},
+        {"id": "275969168", "price_eur": 108_000, "surface_sqm": 60, "year_built": 1969,
+         "floor": 2},
+        {"id": "fara_an", "price_eur": 108_000, "surface_sqm": 60},
+    ]
+    ramase = dedupe(inregistrari)
+    assert [r["id"] for r in ramase] == ["275969177"], "duplicatul nu a fost eliminat"
+
+
+def test_different_flats_at_the_same_price_are_kept():
+    """Deduplication must not merge two genuinely different flats."""
+    from gemini_act.imobiliare_mcp.anevar import dedupe
+
+    ramase = dedupe([
+        {"id": "a", "price_eur": 108_000, "surface_sqm": 60, "year_built": 1969, "floor": 2},
+        {"id": "b", "price_eur": 108_000, "surface_sqm": 60, "year_built": 1985, "floor": 2},
+        {"id": "c", "price_eur": 108_000, "surface_sqm": 60, "year_built": 1969, "floor": 7},
+    ])
+    assert sorted(r["id"] for r in ramase) == ["a", "b", "c"]
+
+
+def test_pdf_grid_shows_every_comparable_with_a_link(tmp_path):
+    comparabile = [
+        {
+            "id": f"27580751{i}",
+            "adresa": f"Titan, bloc {i}",
+            "url": f"https://www.imobiliare.ro/oferta/apartament-27580751{i}",
+            "pret_total": 140_000 + i * 1000,
+            "suprafata_utila": 58,
+            "pret_mp": 2413,
+            "ajustare_neta_procent": 1.0,
+        }
+        for i in range(8)
+    ]
+    date = {
+        "titlu": "Apartament",
+        "pret_total": 179_000,
+        "suprafata_utila": 71.5,
+        "camere": 3,
+        "an_constructie": 1982,
+        "evaluare_anevar": {
+            "disponibil": True,
+            "valoare_estimata_piata": 154_000,
+            "ajustare_recomandata_procent": 16.2,
+            "comparabile_utilizate": comparabile,
+        },
+    }
+    server._completeaza_strategie(date, None)
+    text = _povestea_pdf(date, tmp_path)
+
+    for comparabila in comparabile:
+        assert comparabila["url"] in text, f"lipsește linkul pentru {comparabila['id']}"

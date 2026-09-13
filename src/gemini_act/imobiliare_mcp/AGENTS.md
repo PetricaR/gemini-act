@@ -8,6 +8,8 @@ An MCP server wrapping imobiliare.ro's AI property search. `README.md` covers
 ```
 src/imobiliare_mcp/
   client.py   HTTP against the two upstream hosts; session handling
+  imo360.py   the second source: session-free, geographic, carries rentals
+  imoradar.py the third source: an aggregator over every major RO portal
   parse.py    normalise() raw listing -> typed record; filter_and_rank()
   server.py   MCP tools + the shared Filters model
 ```
@@ -97,6 +99,221 @@ part:
 
 Result tokens are the workaround: they outlive the session, so `reia` and
 `statistici` keep working. Prefer building on tokens over spending sessions.
+
+## The second listings source (`imo360.py`)
+
+`admin.imo360.ro/v1/market/explorer` — unauthenticated, nationwide, and the
+only source here that carries **rentals**, which is what makes a gross yield
+computable. It selects geographically (bounding box or zone id) rather than
+textually, and `/zones` publishes the gazetteer behind that: 1588 zones, ~450
+with real polygons. `normalise()` emits the same record shape `parse.py` does,
+so `filter_and_rank`, the comparables grid and the report renderer all work on
+these records unchanged — which also means **every key that layer subscripts
+must be present**, as `None` when this source doesn't publish it. An absent key
+is a `KeyError`, not a constraint that fails.
+
+The traps, in the order they cost time:
+
+- **The `sale` index is not only sales.** Sorted by price ascending, the first
+  page for Gheorgheni (Cluj) is a 600 € "sale", an ad whose own title says *de
+  inchiriat*, one priced in RON, and two sales of a *cotă ideală* — a 21%
+  undivided share. They land exactly where they do the most damage: the bottom
+  of a price sort, and the p25 of any distribution. `_suspect()` flags them and
+  every statistic excludes them; nothing deletes them, because the ad is real.
+- **~39% of a page can be the same property twice.** Measured: 200 listings
+  from `Titanul Nou` collapse to 122 on (price, surface, rooms, address).
+  Worse here than on the imobiliare.ro side because these records feed medians
+  *and* a published supply count. `dedupe()` runs before anything averages.
+  What it cannot fix is the upstream `total`, which is inflated by the same
+  duplication — so that number is the market's *listing* count, not its
+  property count, and saying otherwise overstates supply.
+- **`usableArea` is missing about half the time; `totalArea` never is.** They
+  differ by roughly 15-20%, so a price per sqm is not comparable across
+  listings without knowing which was used. `surface_basis` records it, and
+  `market_snapshot` forces *one* basis across both sides of a yield — letting
+  each side pick its own was producing yields off by the built-to-usable ratio.
+- **Don't sample by score.** The default ordering is the vendor's own score; a
+  median of the top 300 of 711 listings by score is a median of the good ones.
+  `market_snapshot` samples newest-first and reports `sample.complete` so a
+  caller can tell a whole-market figure from a sampled one.
+- **`total` saturates at 10000** and says so via `totalIsCapped`. Above it the
+  number means "at least", and `SearchPage.supply` returns `None` rather than
+  let a cap be reported as a count. Filters pushed server-side are what bring
+  it back under the cap.
+- **The `title` is the source ad's headline and is regularly wrong about the
+  location** — listing 5194980 is titled "zona Carpati 1 - Satu Mare" and sits
+  in Sector 1, București. Trust `latitude`/`longitude`/`zone`/`locality`/
+  `region`; the title is display text.
+- **Prices are not all in EUR.** A few are `"ron"`. There is no FX rate in this
+  codebase, so `price_eur` is set only for EUR and the raw pair is kept.
+- Multiple `zoneIds` **do** work as a union (109 + 3889 = 3998, checked). A
+  name like "Militari" resolves to two zones in two sectors and both are kept
+  — dropping one silently halves the market being measured.
+- Zones without a polygon publish a **degenerate bbox** (the same point four
+  times). Passing that to a bbox search matches nothing, so `_zone()` reports
+  it as no bbox and the caller uses the zone id instead.
+
+The vendor's score block (`total`, `grade`, and the value/yield/liquidity/
+appreciation/location/negotiation/condition/appeal/trust sub-scores) is kept
+under `imo360_score`, deliberately *not* merged into the record: an ANEVAR
+valuation has to be derivable from comparables and stated adjustments, and an
+opaque vendor score is evidence to weigh beside it, never an input to it.
+
+## The aggregator source (`imoradar.py`)
+
+`imoradar24.ro` is not a fourth portal, it is an index **over** the others —
+one result page for Titan carried ads sourced from `Imobiliare.ro`,
+`storia.ro`, `olx.ro`, `publi24.ro`, `homezz.ro`, `LaJumate.ro` and
+`anuntul.ro`. Two things follow, and they are the whole reason it is here:
+
+- It reaches the **`proprietar` segment**, which lives on OLX and Publi24 and
+  which nothing else here indexes. 16.592 of the 136.751 apartments on sale
+  nationwide; on an owners-only search of Militari the breakdown was publi24
+  29, olx 26, storia 20, imobiliare.ro 4.
+- Where a property is advertised more than once, **every ad comes back with
+  its own price**, seller and posting date in `sellerSources`.
+
+It runs the *same platform as imobiliare.ro* — identical `price` display
+strings, `highlights`, `extraFeatures`, `metroDistance` and `tracking.ga4Item`
+— so `parse.normalise` does the base work verbatim and `imoradar.normalise`
+only overrides what this source means differently. That is also why
+`parse.normalise` grew a `base_url`: same parser, different host.
+
+Transport: the site is an **Inertia** app. The same URL answers with ~1,5 MB of
+HTML carrying the payload in `data-page`, or with ~360 KB of JSON alone given a
+matching `X-Inertia-Version` — a stale version is a bare `409`. So the JSON
+route is used whenever a version is known and the HTML route is both the
+fallback and where the version comes from; a deploy upstream costs one extra
+request, not an outage.
+
+The traps, in the order they cost time:
+
+- **`propertyDaysInMarket` is days since *imoradar24 indexed the ad*, not days
+  on the market.** Listing 2287996 reports 2 days while its own Imobiliare.ro
+  ad says 06-03-2026 — six months earlier. But the reverse also happens:
+  listing 2249080 had been in the index 6 days while the oldest ad still
+  standing was 3 days old, because the ad that brought it in was gone. Neither
+  number is a ceiling, so `days_on_market` is the **longer** of the two and
+  means "on the market at least this long". Freshness is the signal a
+  negotiation turns on; an error there has to fall in this direction.
+- **A price spread is only evidence when it is between different sellers.**
+  Listing 2147878 carries four prices, 175.450 → 193.479 € (10,3%), all posted
+  the same day by one agent — a project's several units grouped as one
+  property. Listing 2249080's 144.900 vs 149.900 € is two agencies on one
+  property, which is the real thing. `price_spread_scope` separates them and
+  `negociere.py` may only argue from `cross_seller`.
+- **`ga4Item.sellerType` speaks Romanian** (`proprietar`) while
+  `sellerSources[].sellerType` in the same payload speaks the vocabulary
+  everything here filters on (`individual`). Unmapped, `tip_vanzator=
+  "individual"` matches nothing at all on this source.
+- **The owner segment carries prices no sale could be at** — 4 of 213 (1,9%):
+  266 € for a garsonieră, 476 € for a 62 mp flat, both monthly rents filed as
+  sale prices. None at all in the agency-fed pool. Flagged by `_suspect` and
+  dropped from the tool's results by default, exactly as `cauta_imo360` does
+  it. Unlike imo360 there is **no title check to add**: this portal rewrites
+  every heading into its own house style, so an advertiser writing *de
+  inchiriat* never survives into `title`.
+- **Expired ads are served among live results** — 2 of 150, with `isArchived`
+  false and the card rendering normally. Flagged (`expired`), not dropped: an
+  expired ad is still evidence of an asking price.
+- **`address` falls back to the neighbourhood** and repeats `location`
+  verbatim when the seller published no street. This portal has no `Locație
+  exactă` badge for `parse.normalise` to find, so `exact_location` is derived
+  from the two actually differing, and `address_text` is cleared when they do
+  not — otherwise a geocoder reports a street-level fix it never had. Only
+  3-8% of listings carry a street.
+- The ga4 **`0.2` price placeholder is here too**, on ~9% (8 of 90) — the same
+  rate as imobiliare.ro, guarded by the same code.
+
+### Asking-price history (`price_history`, `summarise_history`)
+
+`/api/portal/listings/{id}/price-history` returns what the asking price has
+done since the portal first saw the property — the strongest negotiation input
+in this package, and the reason `istoric_pret_imoradar` exists. 68% of sampled
+listings have one (184 of 270), and the endpoint answers for the rest too,
+with a single point.
+
+It is under `/api/`, which robots.txt disallows. **Fetching it is a deliberate
+decision, taken explicitly, not an oversight** — so keep it the way it was
+scoped: one listing at a time, on a user's explicit request, through
+`throttle` like everything else, and never as a sweep across a result set. If
+that posture ever needs revisiting, this paragraph is the thing to re-read.
+
+Reading the series is where it goes wrong quietly:
+
+- **A point is a range across the ads standing that day, not one price.** 9 of
+  37 sampled points had `minPrice != maxPrice`. When several agencies
+  advertise one flat, the range closes as the dearest ad ends: listing 2103212
+  reads `154.000-178.500`, `154.000-178.500`, `154.000` — which is an ad
+  ending, not a 13,7% concession. A point yields a price only when it is
+  unambiguous, and `change_pct` is computed only between two such points.
+  `ambiguous_points` says how much of the history could not be read.
+- **A zero is a missing value.** 7 of 37 points (19%) carried `minPrice: 0`
+  against a real `maxPrice` — listing 2226030 opens `(0, 125000)`. Taken as a
+  price that is a 100% collapse, in the one tool a buyer would act on. With it
+  read as missing, the same listing reports −8,0%, which its own
+  `priceChange.oldPrice` (124.990 €) independently confirms.
+- **An empty `data` is not a stable price.** An id that does not exist answers
+  `200` with `{"data": []}`, exactly like a listing that was never tracked.
+  `observed: False` covers both and must never be worded as "unchanged" — the
+  tool's `nota` says so in as many words, because this is the one error here
+  that would actively mislead a negotiation.
+- **`first_seen` beats every other age signal.** It reaches back a year on old
+  stock (listing 1686071: first seen 23.09.2025, still advertised 355 days
+  later), past both `postedOn` and this portal's indexing date.
+- Dates are `DD.MM.YYYY` — dots, where `sellerSources[].postedOn` in the same
+  payload uses dashes. Same portal, two formats. Prices arrive as ints and as
+  floats (`180449.72`), and duplicate dates are normal: three observations on
+  `10.08.2026` is one property re-checked, not bad data.
+
+### Everything else about the request pattern
+
+`robots.txt` shapes the rest, and it is not incidental: it disallows **every**
+query-string filter, then allows exactly `?page=2` … `?page=10`. So searching
+goes through the canonical path URLs
+(`/apartamente-de-vanzare/bucuresti/sector-3/titan/3-camere/proprietar`), the
+gazetteer of 2.367 such locations is built from the published
+`sitemap-category-ro.xml` rather than from the disallowed autocomplete
+endpoint, and `MAX_PAGES` is 10. The other `/api/portal/...` endpoints the
+page uses (alerts, contact forms, phone reveals) are not touched.
+
+## The seismic register (`risc_seismic.py`)
+
+Not a listings source at all: the AMCCRS register of Bucharest buildings with
+a seismic risk classification, looked up by street address
+(`verifica_risc_seismic`). Full notes are in that module's docstring; the two
+that bite first:
+
+- The page at `amccrs-pmb.ro/lista-imobile-2/` contains **no table**. It is a
+  Ninja Tables widget that loads its 2.796 rows from `admin-ajax.php` after
+  render, so parsing the HTML finds an empty `<colgroup>`. The AJAX URL is
+  scraped out of the widget's inline config rather than hard-coded, so a new
+  table id upstream is followed rather than breaking the tool.
+- **Every column is hand-typed free text** spanning decades. The risk class
+  arrives in a dozen spellings and the urgency category (U1–U3) lives in
+  `observatii`, not in the class column. Word order is load-bearing:
+  `INCADRARE IN CATEGORIE DE URGENTA; NEINCADRATE IN CLASE DE RISC` and
+  `NEINCADRAT IN CATEGORIA DE URGENTA SAU CLASE DE RISC` contain the same two
+  words and mean opposite things — matching on containment rather than on the
+  leading word silently reclassifies 143 buildings as urgent.
+
+The one behaviour not to "simplify": **absence from the register is not a
+clean bill of health.** It lists buildings that have *been expertised*, so an
+un-expertised 1930s block is missing for the worse reason. Every result carries
+that caveat, and the prompt repeats it, because "not on the list" otherwise
+reads to a buyer as reassurance.
+
+`constatare()` is what the reports consume, and it separates three states that
+a valuation has to word differently: **not asked** (`None` — no address, a
+neighbourhood label like "Zona Universitate" rather than a street, or the
+register was unreachable), **asked and absent**, and **asked and classified**.
+Only a match at building level is `concludent`; a street-level one is reported
+as an outstanding check, because the neighbour's *bulina rosie* is not this
+flat's. It feeds `raport.render` (special assumption 4 and the ESG table),
+`negociere.steaguri_rosii` (a `FAPT` flag replacing the year-of-construction
+"check is due" one, `abandon=True` only for RsI) and the PDF's ESG row. None of
+them touches the valuation *number* — the class is reported as a fact and
+argued in the negotiation, not folded into the GEV 630 grid.
 
 ## Conventions
 

@@ -103,6 +103,18 @@ export default function NegotiationStrategy({ strategie, buget }) {
           />
         </div>
 
+        {strategie.abandon_recomandat && (
+          <div className="mb-4 flex items-start gap-3 rounded-xl border border-rose-300 bg-rose-50 p-4">
+            <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-rose-600" />
+            <div>
+              <h4 className="text-sm font-bold text-rose-900">Abandon recomandat</h4>
+              <p className="mt-1 text-xs leading-relaxed text-rose-800">
+                {strategie.motiv_abandon}
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {LADDER_ROWS.map(([key, label, role, tone]) => (
             <div key={key} className={`rounded-xl border p-3 ${TONE[tone]}`}>
@@ -351,6 +363,38 @@ export default function NegotiationStrategy({ strategie, buget }) {
             <ChecklistColumn title="Juridice (pre-antecontract)" items={checks.juridice} />
             <ChecklistColumn title="Structurale" items={checks.structurale} />
           </div>
+        </section>
+      )}
+
+      {(strategie.reguli_de_aur || []).length > 0 && (
+        <section id="reguli" className="card card-pad mb-6">
+          <div className="card-head">
+            <div className="flex items-start gap-3">
+              <div className="icon-tile border-slate-200 bg-slate-50 text-slate-600">
+                <ListChecks className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="section-title">Reguli de aur ale achiziției</h3>
+                <p className="section-sub">
+                  Regulile care se aplică oricărei achiziții rezidențiale, indiferent de
+                  proprietate.
+                </p>
+              </div>
+            </div>
+          </div>
+          <ol className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+            {strategie.reguli_de_aur.map((rule, index) => (
+              <li
+                key={rule}
+                className="flex items-start gap-2.5 rounded-xl border border-slate-200 p-3 text-xs leading-relaxed text-slate-700"
+              >
+                <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-slate-900 text-[10px] font-bold text-white">
+                  {index + 1}
+                </span>
+                {rule}
+              </li>
+            ))}
+          </ol>
         </section>
       )}
 

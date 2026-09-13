@@ -606,7 +606,7 @@ def genereaza_raport_complet_pdf(
         if comps:
             poveste.append(Paragraph("<b>Grilă de Comparație Directă (Proprietăți Comparabile Calificate)</b>", stiluri["SectiuneH3"]))
             linii_comps = [[
-                "ID / Adresă",
+                "Anunț (link) / Adresă",
                 "Dist.",
                 "Dată",
                 "Preț Solicitat",
@@ -615,20 +615,31 @@ def genereaza_raport_complet_pdf(
                 "Ajustare",
                 "Val. Corectată/mp",
             ]]
-            for c in comps[:6]:
+            # Every comparable, not the first six: the grid is the evidence for
+            # the conclusion, and a reader who cannot see all of it cannot check
+            # it. Each row links to the listing it came from.
+            for c in comps:
                 cid = str(c.get("id") or c.get("adresa") or "Comp")
+                eticheta = str(c.get("adresa") or cid)[:40]
+                if url := c.get("url"):
+                    eticheta = (
+                        f'<link href="{url}" color="#1A73E8">{eticheta}</link>'
+                        f'<br/><font size="6" color="#5F6368">{cid}</font>'
+                    )
                 dist = f"{c.get('distanta_km')} km" if c.get("distanta_km") is not None else "-"
                 dt = str(c.get("data_tranzactie") or c.get("data") or "-")
                 c_pret = c.get("pret_total") or c.get("pret") or 0
                 c_sup = c.get("suprafata_utila") or c.get("suprafata") or 0
                 c_pmp = c.get("pret_mp") or c.get("pret_mp_eur") or (round(c_pret / c_sup) if c_sup else 0)
                 aj_net = c.get("ajustare_neta_procent")
-                aj_str = f"{aj_net:+.1f}%" if aj_net is not None else "0.0%"
+                # "0.0%" claimed a comparable needed no adjustment; None means
+                # nobody computed one.
+                aj_str = f"{aj_net:+.1f}%" if aj_net is not None else "n/a"
                 val_cor = c.get("valoare_corectata_eur_mp")
                 val_cor_str = f"{val_cor:,.0f} €/mp" if val_cor else "-"
 
                 linii_comps.append([
-                    cid[:18],
+                    eticheta,
                     dist,
                     dt,
                     f"{c_pret:,.0f} {moneda}",
@@ -638,7 +649,7 @@ def genereaza_raport_complet_pdf(
                     val_cor_str,
                 ])
             poveste.append(
-                _formateaza_tabel(linii_comps, stiluri, [85, 45, 45, 68, 48, 62, 58, 76])
+                _formateaza_tabel(linii_comps, stiluri, [110, 38, 38, 62, 42, 56, 48, 93])
             )
             poveste.append(Spacer(1, 8))
 
@@ -1438,6 +1449,22 @@ def genereaza_raport_complet_pdf(
         date_proprietate.get("specificatii_dezvoltator", {}) or {}
     ).get("certificare_verde")
     risc_clim = esg_data.get("riscuri_climatice")
+    # The seismic row used to be an instruction to go and check. The dossier now
+    # carries the answer when the address could be resolved, so the row reports
+    # it -- and still says what the register does not prove when it does not.
+    rs = date_proprietate.get("risc_seismic") or {}
+    if rs.get("concludent"):
+        risc_seismic_txt = str(rs.get("eticheta"))
+        risc_seismic_sursa = (
+            f"Registrul AMCCRS — {rs.get('adresa_registru')} "
+            f"(O.G. 20/1994, Legea nr. 212/2022)"
+        )
+    elif rs.get("verificat"):
+        risc_seismic_txt = "Neconcludent"
+        risc_seismic_sursa = str(rs.get("rezumat"))
+    else:
+        risc_seismic_txt = str(risc_clim) if risc_clim else "Neverificat"
+        risc_seismic_sursa = "Evidențele AMCCRS pentru adresa exactă (Legea nr. 212/2022)"
     social_txt = esg_data.get("social")
     guvern_txt = esg_data.get("guvernanta")
 
@@ -1459,8 +1486,8 @@ def genereaza_raport_complet_pdf(
         ],
         [
             "Risc Seismic",
-            str(risc_clim) if risc_clim else "Neverificat",
-            "Evidențele AMCCRS pentru adresa exactă (Legea nr. 212/2022)",
+            risc_seismic_txt,
+            risc_seismic_sursa,
         ],
         [
             "Social & Comunitate",
@@ -1619,6 +1646,17 @@ def genereaza_raport_complet_pdf(
     strategie = date_proprietate.get("strategie_negociere") or {}
     scara = strategie.get("scara") or {}
     if strategie.get("disponibil") and scara:
+        if strategie.get("abandon_recomandat"):
+            poveste.append(_creeaza_card_apel(
+                strategie.get("motiv_abandon") or
+                "Condițiile identificate recomandă abandonarea tranzacției.",
+                stiluri,
+                titlu="ABANDON RECOMANDAT",
+                culoare_accent=GOOGLE_RED,
+                culoare_fundal=TINT_RED,
+            ))
+            poveste.append(Spacer(1, 8))
+
         poveste.append(Paragraph("<b>Scara de Ofertare</b>", stiluri["SectiuneH3"]))
 
         def _eur_or_dash(valoare: Any) -> str:
@@ -1724,6 +1762,16 @@ def genereaza_raport_complet_pdf(
             ))
             poveste.append(Spacer(1, 8))
 
+        if reguli := strategie.get("reguli_de_aur"):
+            poveste.append(Paragraph(
+                "<b>Reguli de Aur ale Achiziției</b>", stiluri["SectiuneH3"]
+            ))
+            randuri_reguli = [["Nr.", "Regulă"]]
+            for index, regula in enumerate(reguli, 1):
+                randuri_reguli.append([str(index), str(regula)])
+            poveste.append(_formateaza_tabel(randuri_reguli, stiluri, [30, 457]))
+            poveste.append(Spacer(1, 8))
+
         poveste.append(Paragraph(
             f"<i>{strategie.get('sursa', '')}</i>", stiluri["CorpMuted"]
         ))
@@ -1765,8 +1813,17 @@ def genereaza_raport_complet_pdf(
             accent_concluzie, tint_concluzie = GOOGLE_AMBER, TINT_AMBER
 
         puncte_argumente = []
+        # `ajustare_pct` is None whenever the valuation reported a margin in euros
+        # but no percentage, and formatting None crashed the whole PDF build.
         if marja_eur > 0:
-            puncte_argumente.append(f"Preț cerut cu {ajustare_pct:+.1f}% peste nivelul mediu al pieței")
+            if ajustare_pct is not None:
+                puncte_argumente.append(
+                    f"Preț cerut cu {ajustare_pct:+.1f}% peste nivelul mediu al pieței"
+                )
+            else:
+                puncte_argumente.append(
+                    f"Preț cerut cu ~{marja_eur:,.0f} {moneda} peste valoarea estimată"
+                )
         bug_rep_val = bug_rep if "bug_rep" in locals() and bug_rep else 0
         if bug_rep_val > 0:
             puncte_argumente.append(f"Buget necesar remediere defecte (~{bug_rep_val:,.0f} €)")

@@ -28,8 +28,8 @@ except ImportError:  # pragma: no cover - depends on which SDK major is installe
     from mcp.server.fastmcp import FastMCP as MCPServer
 from pydantic import BaseModel, Field
 
-from . import comps, costuri, locatie, maps, negociere, paths, viziune
-from .anevar import Params, evaluate, is_furnished
+from . import comps, costuri, imo360, imoradar, locatie, maps, negociere, paths, viziune
+from .anevar import Params, dedupe, evaluate, is_furnished
 from .client import ImobiliareClient, SessionError
 from .galerie import contact_sheet
 from .parse import filter_and_rank, normalise
@@ -363,6 +363,422 @@ def sesiune_noua() -> dict[str, Any]:
             return {"error": f"{type(e).__name__}: {e}"}
 
 
+# -- imo360: the session-free source --------------------------------------
+#
+# Everything above this point depends on imobiliare.ro: `cauta` on a browser
+# session that expires in minutes, `cauta_obscura` on a headless browser,
+# `comps` on a daily sitemap. The tools below answer from imo360's explorer
+# API, which needs no credential of any kind -- so they are the ones that
+# still work unattended, and they reach data the other source does not
+# publish at all: rentals, and therefore yield.
+
+
+def _imo360_geo(
+    zona: str | None, oras: str | None, client: imo360.Imo360Client
+) -> tuple[list[int], list[dict[str, Any]]]:
+    """Resolve a neighbourhood name to zone ids, plus what was resolved.
+
+    The resolution is returned, not just used: "Militari" is two zones in two
+    different sectors, and a caller told only the numbers cannot tell whether
+    the answer covers the neighbourhood they meant.
+    """
+    zones = client.find_zones(zona or "", city=oras)
+    return (
+        [z.id for z in zones],
+        [{"id": z.id, "name": z.name, "city": z.city, "county": z.county} for z in zones],
+    )
+
+
+@mcp.tool()
+def cauta_imo360(
+    zona: Annotated[
+        str,
+        Field(
+            description="Neighbourhood or zone name, e.g. 'Titan', 'Militari', 'Gheorgheni'. Resolved against imo360's published gazetteer of 1588 Romanian zones."
+        ),
+    ],
+    oras: Annotated[
+        str | None,
+        Field(
+            description="City or county, to disambiguate a name used in several places, e.g. 'bucuresti', 'cluj'."
+        ),
+    ] = None,
+    tranzactie: Annotated[
+        Literal["sale", "rent"], Field(description="Sale or rental listings")
+    ] = "sale",
+    tip: Annotated[
+        Literal["apartment", "house", "land", "commercial_space", "office"] | None,
+        Field(description="Property type. Leave unset for every type."),
+    ] = None,
+    filtre: Filters | None = None,
+    sort: Annotated[SortBy, Field(description="Ordering of the results")] = "price_per_sqm",
+    limit: Annotated[int, Field(description="Maximum listings to return", ge=1, le=100)] = 20,
+    include_neconforme: Annotated[
+        bool,
+        Field(
+            description="Include listings filed under `sale` that are not sales of the whole property -- rental ads, undivided shares, swaps. Off by default."
+        ),
+    ] = False,
+    pool: Annotated[
+        int,
+        Field(description="How many listings to pull before filtering locally", ge=50, le=500),
+    ] = 200,
+) -> dict[str, Any]:
+    """Search Romanian property listings via imo360, without any session.
+
+    Use this rather than `cauta` when there is no browser session to spend, and
+    whenever the question is about a *zone* rather than a description -- this
+    source selects geographically, so "everything in Titan" is exact rather
+    than a slug match.
+
+    Returns the real number of listings on the market in that zone
+    (`oferta_totala`) whenever the upstream count is not capped, which is what
+    makes it usable as a measure of supply and not just a page of results.
+    """
+    filters = filtre or Filters()
+    with imo360.Imo360Client() as client:
+        zone_ids, resolved = _imo360_geo(zona, oras, client)
+        if not zone_ids:
+            return {
+                "status": "error",
+                "error_message": (
+                    f"Zona '{zona}' nu a fost găsită în nomenclatorul imo360"
+                    + (f" pentru '{oras}'" if oras else "")
+                    + ". Încearcă un nume de cartier mai exact."
+                ),
+            }
+        # The price bounds are pushed server-side as well as being enforced
+        # locally by `filter_and_rank`. Not redundant: the upstream count is
+        # capped at 10000, so a filter applied there is also what turns
+        # `oferta_totala` back into a real number.
+        page = client.collect(
+            transaction=tranzactie,
+            zone_ids=zone_ids,
+            property_type=tip,
+            rooms=filters.camere,
+            price_min=filters.pret_min,
+            price_max=filters.pret_max,
+            max_results=pool,
+        )
+
+    # Deduplicated before filtering: this source re-advertises heavily (a
+    # measured 39% on one zone), and a page of the same flat three times is
+    # worse than a shorter honest one.
+    records = imo360.dedupe([imo360.normalise(listing) for listing in page.listings])
+    # The mis-filed ones are dropped from the *list* as well as from the
+    # statistics, and by default. Sorting by price per sqm ascending -- the
+    # default, and what anyone hunting a bargain asks for -- otherwise puts an
+    # 800 EUR rental ad at the top of a search for flats in Floreasca, which
+    # reads as the find of the year. Counted in the answer rather than
+    # vanishing, and `include_neconforme` brings them back.
+    neconforme = [r for r in records if r.get("suspect")]
+    if not include_neconforme:
+        records = [r for r in records if not r.get("suspect")]
+    matches, listings = _apply(records, filters, sort, limit)
+    return {
+        "status": "success",
+        "sursa": "imo360",
+        "zone_rezolvate": resolved,
+        "oferta_totala": page.supply,
+        "oferta_totala_plafonata": page.total_is_capped,
+        "retrieved": len(records),
+        "duplicate_removed": len(page.listings)
+        - len(records)
+        - len(neconforme) * (not include_neconforme),
+        "excluse_neconforme": 0 if include_neconforme else len(neconforme),
+        "matched": len(matches),
+        "returned": len(listings),
+        "listings": listings,
+    }
+
+
+@mcp.tool()
+def puls_piata(
+    zona: Annotated[str, Field(description="Neighbourhood or zone name, e.g. 'Titan'")],
+    oras: Annotated[
+        str | None, Field(description="City or county, to disambiguate the name")
+    ] = None,
+    tip: Annotated[
+        Literal["apartment", "house", "land", "commercial_space", "office"],
+        Field(description="Property type the snapshot is about"),
+    ] = "apartment",
+    camere: Annotated[
+        int | None, Field(description="Restrict to a room count, e.g. 2", ge=0, le=20)
+    ] = None,
+    toate_zonele: Annotated[
+        bool,
+        Field(
+            description="Include every zone matching the name (e.g. Militari in both Sector 5 and 6) rather than only the best match."
+        ),
+    ] = True,
+) -> dict[str, Any]:
+    """Sale and rental sides of one zone, and the gross yield between them.
+
+    The only tool here that can answer "what does this zone earn": rentals are
+    in imo360's index, so asking price per sqm and rent per sqm come from the
+    same geography on the same day. Reports how many properties are actually
+    on the market for sale and for rent.
+
+    The yield is **gross** -- before vacancy, management, tax and maintenance.
+    """
+    with imo360.Imo360Client() as client:
+        zone_ids, resolved = _imo360_geo(zona, oras, client)
+        if not zone_ids:
+            return {
+                "status": "error",
+                "error_message": f"Zona '{zona}' nu a fost găsită în nomenclatorul imo360.",
+            }
+        if not toate_zonele:
+            zone_ids, resolved = zone_ids[:1], resolved[:1]
+        snapshot = imo360.market_snapshot(
+            client, zone_ids=zone_ids, property_type=tip, rooms=camere
+        )
+
+    return {
+        "status": "success",
+        "sursa": "imo360",
+        "zone_rezolvate": resolved,
+        **snapshot,
+        "nota": (
+            "Randamentul este brut: înainte de neocupare, administrare, impozit și "
+            "întreținere. Prețurile pe mp sunt calculate pe baza suprafeței "
+            f"'{snapshot['basis']['surface']}'."
+        ),
+    }
+
+
+@mcp.tool()
+def detalii_imo360(
+    id_anunt: Annotated[str, Field(description="An imo360 listing id, from a cauta_imo360 result")],
+) -> dict[str, Any]:
+    """Full record for one imo360 listing, including the whole photo gallery.
+
+    The search results carry a single thumbnail; this is what returns the rest,
+    which is what the visual inspection tools need to look at a property.
+    """
+    with imo360.Imo360Client() as client:
+        try:
+            raw = client.listing(id_anunt)
+        except imo360.Imo360Error as e:
+            return {"status": "error", "error_message": str(e)}
+    record = imo360.normalise(raw)
+    # The source ad's own attributes -- heating, building material, windows,
+    # lift, advertiser type, primary vs secondary market. Not normalised into
+    # the record because the vocabulary is the upstream portal's and varies by
+    # provider; passed through so the model can read what is there.
+    if caracteristici := _imo360_attributes(raw):
+        record["caracteristici_sursa"] = caracteristici
+    return {"status": "success", "sursa": "imo360", "listing": record}
+
+
+def _imo360_attributes(raw: dict[str, Any]) -> dict[str, Any]:
+    """Flatten the source portal's attribute block, when there is one."""
+    features = raw.get("features")
+    if not isinstance(features, dict):
+        return {}
+    out: dict[str, Any] = {}
+    storia = features.get("storia")
+    if isinstance(storia, dict):
+        for item in storia.get("characteristics") or []:
+            if isinstance(item, dict) and item.get("key"):
+                out[str(item["key"])] = item.get("localizedValue") or item.get("value")
+        for item in storia.get("additional_information") or []:
+            if not isinstance(item, dict) or not item.get("label"):
+                continue
+            # Values arrive namespaced -- "heating::gas", "::n" -- and the
+            # namespace is noise once the label is already the key.
+            values = [str(v).split("::")[-1] for v in item.get("values") or []]
+            if values:
+                out[str(item["label"])] = values if len(values) > 1 else values[0]
+    return out
+
+
+@mcp.tool()
+def cauta_imoradar(
+    zona: Annotated[
+        str | None,
+        Field(
+            description="Neighbourhood, town or county, e.g. 'Titan', 'Cluj-Napoca', 'Brasov'. Resolved against the 2367 locations imoradar24 publishes. Leave unset to search the whole country."
+        ),
+    ] = None,
+    oras: Annotated[
+        str | None,
+        Field(
+            description="City or county, to disambiguate a name used in several places, e.g. 'bucuresti', 'cluj'."
+        ),
+    ] = None,
+    doar_proprietar: Annotated[
+        bool,
+        Field(
+            description="Only listings advertised directly by owners, no agencies. This source is the one that actually reaches that segment (OLX, Publi24)."
+        ),
+    ] = False,
+    filtre: Filters | None = None,
+    sort: Annotated[SortBy, Field(description="Ordering of the results")] = "price_per_sqm",
+    limit: Annotated[int, Field(description="Maximum listings to return", ge=1, le=100)] = 20,
+    include_neconforme: Annotated[
+        bool,
+        Field(
+            description="Include listings whose price is below any plausible sale price -- rents filed as sales, typos. Off by default."
+        ),
+    ] = False,
+    pool: Annotated[
+        int,
+        Field(description="How many listings to pull before filtering locally", ge=30, le=300),
+    ] = 120,
+) -> dict[str, Any]:
+    """Search apartments for sale across every major Romanian portal at once.
+
+    imoradar24 aggregates imobiliare.ro, storia.ro, olx.ro, publi24.ro,
+    homezz.ro and others into one de-duplicated index, so this is the tool for
+    two questions the other two sources cannot answer:
+
+    * **"what is for sale from owners directly"** -- that segment lives on OLX
+      and Publi24, which nothing else here indexes (`doar_proprietar`);
+    * **"is this flat advertised at more than one price"** -- where a property
+      is on several portals or with several agencies, every ad is returned in
+      `sources`, with `price_spread_pct` between them.
+
+    Needs no session, unlike `cauta`. `oferta_totala` is a de-duplicated count
+    of properties, not of ads, so it can be quoted as supply directly.
+    """
+    filters = filtre or Filters()
+    with imoradar.ImoradarClient() as client:
+        resolved = None
+        place = None
+        if zona:
+            hits = client.find_places(zona, city=oras)
+            if not hits:
+                return {
+                    "status": "error",
+                    "error_message": (
+                        f"Zona '{zona}' nu are o pagină publicată pe imoradar24"
+                        + (f" pentru '{oras}'" if oras else "")
+                        + ". Încearcă un nume de cartier, oraș sau județ mai exact."
+                    ),
+                }
+            place = hits[0].path
+            resolved = {
+                "path": hits[0].path,
+                "name": hits[0].name,
+                "city": hits[0].city,
+                "county": hits[0].county,
+                "url": hits[0].url,
+                # Kept so a caller can tell "Central" resolved to the wrong
+                # town before reading 20 listings from it.
+                "alternative": [p.path for p in hits[1:4]],
+            }
+        page = client.collect(
+            place=place,
+            # The portal publishes an exact-room-count URL but no range, so
+            # only an exact `camere` narrows server-side; everything else is
+            # enforced locally by `filter_and_rank` like on every other source.
+            rooms=filters.camere,
+            owner_only=doar_proprietar,
+            max_results=pool,
+        )
+
+    # `imo360.dedupe` rather than one of this module's own: it collapses on
+    # (price, surface, rooms, address), which is source-agnostic, and this
+    # portal still re-advertises within a page even though it merges across
+    # portals -- 14 of 90 on one Titan pull.
+    records = imo360.dedupe([imoradar.normalise(listing) for listing in page.listings])
+    # Dropped by default and counted, exactly as `cauta_imo360` does it: the
+    # default sort is price per sqm ascending, so a 476 EUR rent filed as a
+    # sale would otherwise lead every search of the owner segment.
+    neconforme = [r for r in records if r.get("suspect")]
+    if not include_neconforme:
+        records = [r for r in records if not r.get("suspect")]
+    matches, listings = _apply(records, filters, sort, limit)
+    portals: dict[str, int] = {}
+    for record in records:
+        portals[record["source_portal"] or "necunoscut"] = (
+            portals.get(record["source_portal"] or "necunoscut", 0) + 1
+        )
+    return {
+        "status": "success",
+        "sursa": "imoradar24",
+        "zona_rezolvata": resolved,
+        "oferta_totala": page.total,
+        "oferta_proprietari": page.owner_total,
+        "portaluri": dict(sorted(portals.items(), key=lambda kv: -kv[1])),
+        "retrieved": len(records),
+        "duplicate_removed": len(page.listings)
+        - len(records)
+        - len(neconforme) * (not include_neconforme),
+        "excluse_neconforme": 0 if include_neconforme else len(neconforme),
+        "matched": len(matches),
+        "returned": len(listings),
+        "pagini_ramase": page.truncated,
+        "listings": listings,
+    }
+
+
+@mcp.tool()
+def istoric_pret_imoradar(
+    id_anunt: Annotated[
+        str, Field(description="An imoradar24 listing id, from a cauta_imoradar result")
+    ],
+) -> dict[str, Any]:
+    """How one listing's asking price has moved since the portal first saw it.
+
+    The single strongest input to a negotiation available here: what the
+    seller has already conceded, how long they have been trying, and how many
+    times they have cut. `zile_de_la_prima_aparitie` reaches back a year on
+    old listings -- past both the ad's own posting date and this portal's
+    indexing date -- so it is the firmest lower bound on time on the market.
+
+    Two things must be carried into whatever is said about the result:
+
+    * **An empty history is not a stable price.** The endpoint answers the
+      same way for a listing it has never tracked and for one that does not
+      exist, so `observat: false` means "nothing to read", never "unchanged".
+    * **`schimbare_pct` is only computed between unambiguous observations.**
+      Where a property is advertised by several agencies at once, a day's
+      entry is a price *range*; the range closing as the dearest ad ends is
+      not the seller dropping their price. Those days are counted in
+      `puncte_ambigue` and excluded from the change.
+    """
+    listing_id = _resolve_id(id_anunt)
+    try:
+        with imoradar.ImoradarClient() as client:
+            raw = client.price_history(listing_id)
+    except imoradar.ImoradarError as exc:
+        return {"status": "error", "error_message": str(exc)}
+
+    history = imoradar.summarise_history(raw)
+    if not history["observed"]:
+        return {
+            "status": "success",
+            "sursa": "imoradar24",
+            "id": listing_id,
+            "observat": False,
+            "nota": (
+                "imoradar24 nu are istoric de preț pentru acest anunț. Endpointul "
+                "răspunde identic pentru un anunț netrackat și pentru unul inexistent, "
+                "deci asta NU înseamnă că prețul a rămas neschimbat."
+            ),
+        }
+    return {
+        "status": "success",
+        "sursa": "imoradar24",
+        "id": listing_id,
+        "observat": True,
+        "prima_aparitie": history["first_seen"],
+        "ultima_aparitie": history["last_seen"],
+        "zile_de_la_prima_aparitie": history["days_since_first_seen"],
+        "pret_initial": history["price_first_eur"],
+        "pret_curent": history["price_last_eur"],
+        "pret_minim": history["price_min_eur"],
+        "pret_maxim": history["price_max_eur"],
+        "schimbare_pct": history["change_pct"],
+        "reduceri": history["drops"],
+        "puncte_ambigue": history["ambiguous_points"],
+        "observatii": history["points"],
+        "serie": history["series"],
+    }
+
+
 class ParametriEvaluare(BaseModel):
     """Valuation inputs. Every one is argued in the report (GEV 630 §71), and
     every one can be overridden -- these are market conventions, not laws."""
@@ -630,9 +1046,7 @@ def _analiza_piata(area: str, pool: list[dict[str, Any]]) -> dict[str, Any]:
         "pret_minim_zona_eur_mp": round(min(unitare)),
         "pret_maxim_zona_eur_mp": round(max(unitare)),
         "oferta_activa_similara": len(pool),
-        "timp_mediu_expunere_luni": (
-            round(statistics.median(zile) / 30, 1) if zile else None
-        ),
+        "timp_mediu_expunere_luni": (round(statistics.median(zile) / 30, 1) if zile else None),
         "timp_mediu_expunere_zile": round(statistics.median(zile)) if zile else None,
         # Not derivable from a single snapshot of active offers.
         "variatie_anuala_procent": None,
@@ -659,6 +1073,29 @@ def _constatari_vizuale(findings: Any) -> list[str]:
     semne = getattr(findings, "semne_ingrijorare", None) or []
     bucati.extend(str(x) for x in semne)
     return bucati
+
+
+def _risc_seismic(subject: dict[str, Any]) -> dict[str, Any] | None:
+    """The AMCCRS finding for a listing, or None when it cannot be established.
+
+    Only for Bucharest: the register is the capital's, and running a Cluj
+    address against it would answer "not in the register" about a list that was
+    never going to contain it -- a reassuring sentence with nothing behind it.
+
+    Never raises. A register that is unreachable has to leave a valuation
+    slightly less informed, not fail it.
+    """
+    oras = f"{subject.get('city') or ''} {subject.get('area') or ''}".lower()
+    adresa = subject.get("address_text") or ""
+    if "bucure" not in oras and "bucure" not in adresa.lower() and "sector" not in oras:
+        return None
+    try:
+        from . import risc_seismic
+
+        return risc_seismic.constatare(adresa)
+    except Exception as exc:  # noqa: BLE001 - an informative extra, never a blocker
+        logger.debug("Verificarea AMCCRS nu a reușit: %s", exc)
+        return None
 
 
 def _reports_dir() -> Path:
@@ -758,6 +1195,11 @@ def evaluare(
         )
 
     usable = [r for r in sale_records if r.get("price_eur") and r.get("surface_sqm")]
+    # Deduplicate before ranking, not after. `evaluate` dedupes too, but by then
+    # the top-N slice has already been taken -- so a flat listed twice used to
+    # consume two of the twelve places and the grid came back one comparable
+    # short, without saying why.
+    usable = dedupe(usable)
     chosen = comps.rank_by_similarity(subject, usable)[:comparabile]
     piata = _analiza_piata(area, usable)
     if len(chosen) < 3:
@@ -835,17 +1277,24 @@ def evaluare(
     sv_file = f"streetview-{listing_id}.jpg" if street_view else None
     map_file = f"harta-{listing_id}.png" if static_map else None
 
+    risc_seismic_constatare = _risc_seismic(subject)
     strategie = negociere.plan(
         subject,
         valuation.final_value,
         constatari=_constatari_vizuale(findings),
         deviz_renovare=(findings.cost_renovare_estimat_eur if findings else None),
+        risc_seismic=risc_seismic_constatare,
     )
     buget = costuri.buget_consolidat(
         subject.get("price_eur"),
         subject.get("surface_sqm"),
         subject.get("rooms"),
         deviz_renovare_eur=(findings.cost_renovare_estimat_eur if findings else None),
+        # Already established above for the valuation grid; the budget needs it
+        # for the opposite reason. A flat advertised furnished carries its
+        # furniture in the asking price, so budgeting to furnish it again
+        # inflates the total by 5-7k per room.
+        include_mobilare=not subject_furnished,
         prin_agentie=(subject.get("seller_type") == "agency"),
     )
 
@@ -867,6 +1316,7 @@ def evaluare(
         scor_accesibilitate=scor_acces,
         strategie=strategie,
         buget=buget,
+        risc_seismic=risc_seismic_constatare,
     )
     path.write_text(markdown, encoding="utf-8")
 
@@ -927,8 +1377,14 @@ def evaluare(
         "strategie_negociere": _strategie_pe_scurt(strategie),
         "buget_consolidat": {
             k: buget.get(k)
-            for k in ("status", "disponibil", "total_minim_eur", "total_maxim_eur",
-                      "total_estimat_eur", "costuri_conexe_eur")
+            for k in (
+                "status",
+                "disponibil",
+                "total_minim_eur",
+                "total_maxim_eur",
+                "total_estimat_eur",
+                "costuri_conexe_eur",
+            )
         },
         "fiabilitate": valuation.reliability,
         "extrapolare_suprafata": valuation.extrapolated,
@@ -941,9 +1397,7 @@ def evaluare(
 
 @mcp.tool()
 def strategie_negociere(
-    identificator: Annotated[
-        str, Field(description="Listing id or full imobiliare.ro offer URL")
-    ],
+    identificator: Annotated[str, Field(description="Listing id or full imobiliare.ro offer URL")],
     buget_total_max: Annotated[
         float | None,
         Field(
@@ -992,11 +1446,18 @@ def strategie_negociere(
         raw = client.hydrate([listing_id])
     subject = normalise(raw[0]) if raw else {}
 
+    # `if ... is not None` rather than `or`, for the same reason as in
+    # `costuri.buget_consolidat`: a caller passing a deviz of 0 is stating the
+    # property needs no work, and `or` would discard that and fall through.
+    deviz = deviz_renovare if deviz_renovare is not None else ev.get("cost_renovare_estimat_eur")
     buget = costuri.buget_consolidat(
         subject.get("price_eur"),
         subject.get("surface_sqm"),
         subject.get("rooms"),
-        deviz_renovare_eur=deviz_renovare or ev.get("cost_renovare_estimat_eur"),
+        deviz_renovare_eur=deviz,
+        include_mobilare=not is_furnished(
+            subject, slug_hint="-mobilat-" in (subject.get("url") or "")
+        ),
         prin_agentie=prin_agentie,
     )
     constatari = [
@@ -1017,6 +1478,7 @@ def strategie_negociere(
         deviz_renovare=deviz_renovare or ev.get("cost_renovare_estimat_eur"),
         buget_total_max=buget_total_max,
         costuri_conexe=buget.get("costuri_conexe_eur"),
+        risc_seismic=_risc_seismic(subject),
     )
     return {
         "status": "success",
@@ -1377,6 +1839,71 @@ def analizeaza_electrocasnice_si_defecte_finisaje(
     )
 
 
+@mcp.tool()
+def verifica_risc_seismic(
+    adresa_sau_identificator: Annotated[
+        str,
+        Field(
+            description=(
+                "Street address in Bucharest ('Strada Academiei 15, Sector 1'), or an "
+                "imobiliare.ro listing id / URL, in which case the address is taken from "
+                "the listing."
+            )
+        ),
+    ],
+    numar: Annotated[
+        str | None,
+        Field(description="House number, when it is not already part of the address."),
+    ] = None,
+    sector: Annotated[
+        str | None, Field(description="Bucharest sector ('Sector 3'), to disambiguate.")
+    ] = None,
+    limita: Annotated[int, Field(description="Maximum matches to return (default 5).")] = 5,
+) -> dict[str, Any]:
+    """Check a Bucharest building against the AMCCRS seismic-risk register (bulina rosie).
+
+    Answers whether the building has been classified RsI-RsIV or in an urgency category
+    U1-U3, whether it has already been consolidated, when it was expertised and by whom,
+    and what that means for price, mortgage eligibility and insurance.
+
+    A class RsI building ("bulina rosie") is the single largest hidden discount on a
+    Bucharest flat: most banks will not lend against it and the owner carries a legal
+    obligation to consolidate -- none of which a listing discloses.
+
+    Absence from the register is not a clean bill of health: it only covers buildings that
+    have been through a technical expertise, so the result says so explicitly.
+    """
+    from . import risc_seismic
+
+    text = (adresa_sau_identificator or "").strip()
+    adresa = text
+    sursa_adresei = "utilizator"
+
+    # A listing id resolves to the portal's own address line, which is usually
+    # street-level only -- sellers omit the number. That is worth saying in the
+    # answer rather than letting a street-level match read as a building-level one.
+    if text.isdigit() or "imobiliare.ro" in text.lower():
+        try:
+            lid = _resolve_id(text)
+            with _client() as client:
+                raw = client.hydrate([lid])
+            if raw:
+                record = normalise(raw[0])
+                adresa = (record.get("address_text") or record.get("title") or "").strip() or text
+                sursa_adresei = f"anunt {lid}"
+        except Exception as exc:  # noqa: BLE001 - fall back to the raw text as an address
+            logger.debug("Nu am putut prelua adresa din anunt: %s", exc)
+
+    rezultat = risc_seismic.cauta(adresa, numar=numar, sector=sector, limita=limita)
+    rezultat["adresa_folosita"] = adresa
+    rezultat["sursa_adresei"] = sursa_adresei
+    if sursa_adresei != "utilizator" and not rezultat.get("interogare", {}).get("numere_cautate"):
+        rezultat["avertisment"] = (
+            "Anuntul nu publica numarul postal, asa ca verificarea e la nivel de strada. "
+            "Cere adresa exacta inainte de a folosi rezultatul in negociere. "
+        ) + str(rezultat.get("avertisment") or "")
+    return rezultat
+
 
 # The finishes audit reports defects as `defecte_si_probleme`, each an object
 # with `element_afectat` / `descriere_defect` -- not the flat list of strings the
@@ -1485,15 +2012,35 @@ def _completeaza_strategie(date: dict[str, Any], sub: dict[str, Any] | None) -> 
     audit = date.get("audit_electrocasnice_finisaje") or date.get("audit_electrocasnice") or {}
     if isinstance(audit, dict):
         sumar = audit.get("sumar_financiar") or {}
-        deviz = sumar.get("total_buget_remediere_defecte_eur") or audit.get(
-            "cost_renovare_estimat_eur"
-        )
+        # A remediation budget of 0 is an audit that found nothing, and it has
+        # to survive as 0 rather than fall through to the next candidate.
+        for candidate in (
+            sumar.get("total_buget_remediere_defecte_eur"),
+            audit.get("cost_renovare_estimat_eur"),
+        ):
+            if candidate is not None:
+                deviz = candidate
+                break
 
     if "buget_consolidat" not in date:
         date["buget_consolidat"] = costuri.buget_consolidat(
-            pret, suprafata, camere, deviz_renovare_eur=deviz,
+            pret,
+            suprafata,
+            camere,
+            deviz_renovare_eur=deviz,
+            include_mobilare=not is_furnished(
+                record, slug_hint="-mobilat-" in (record.get("url") or "")
+            ),
             prin_agentie=(record.get("seller_type") == "agency"),
         )
+
+    # -- Risc seismic (AMCCRS) ---------------------------------------------
+    # Before the strategy, which consumes it: a confirmed RsI changes which red
+    # flags the plan raises, and it is the one finding that can make the
+    # purchase the wrong decision rather than merely the wrong price.
+    if "risc_seismic" not in date:
+        if constatare_rs := _risc_seismic(record):
+            date["risc_seismic"] = constatare_rs
 
     # -- Strategia de negociere -------------------------------------------
     if "strategie_negociere" not in date:
@@ -1515,6 +2062,7 @@ def _completeaza_strategie(date: dict[str, Any], sub: dict[str, Any] | None) -> 
             deviz_renovare=deviz,
             costuri_conexe=conexe,
             dezvoltator_sanatos=sanatate,
+            risc_seismic=date.get("risc_seismic"),
         )
 
     # -- Riscuri: the red flags the evidence supports, not a generic list ---
@@ -1536,8 +2084,7 @@ def _completeaza_strategie(date: dict[str, Any], sub: dict[str, Any] | None) -> 
                 "comparabile (GEV 630 §54–58)."
             ),
             "abordare_secundara": (
-                "Capitalizarea directă a venitului net din chirii comparabile "
-                "(GEV 630 §59–71)."
+                "Capitalizarea directă a venitului net din chirii comparabile (GEV 630 §59–71)."
             ),
             "sursa_comparabile": "Oferte active publicate pe imobiliare.ro, în aceeași arie.",
             "strategie_negociere": (
@@ -1786,9 +2333,7 @@ def genereaza_raport_complet_pdf(
                                     "provenienta": "estimat",
                                 }
                                 if eval_res.get("piata"):
-                                    date_proprietate.setdefault(
-                                        "analiza_piata", eval_res["piata"]
-                                    )
+                                    date_proprietate.setdefault("analiza_piata", eval_res["piata"])
                             else:
                                 date_proprietate["evaluare_anevar"] = {
                                     "status": "indisponibil",

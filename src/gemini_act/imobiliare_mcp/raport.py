@@ -60,7 +60,8 @@ def render(v: Valuation, *, comps_source: str, rents_source: str,
            static_map_file: str | None = None,
            scor_accesibilitate: float | None = None,
            strategie: dict | None = None,
-           buget: dict | None = None) -> str:
+           buget: dict | None = None,
+           risc_seismic: dict | None = None) -> str:
     s, p, r = v.subject, v.params, v.rates
     ask, surface = s.get("price_eur"), s.get("surface_sqm")
     today = date.today().strftime("%d.%m.%Y")
@@ -265,7 +266,21 @@ def render(v: Valuation, *, comps_source: str, rents_source: str,
         "suprafața declarată în anunț sunt de 2–5%.")
     add("3. **Starea tehnică** — se presupune conformă descrierii vânzătorului, fără vicii ascunse. "
         "Nu s-a efectuat inspecție.")
-    add("4. **Structura de rezistență** — se presupune neîncadrată în clasă de risc seismic.")
+    # This was a standing assumption for as long as nothing could check it. Now
+    # that the AMCCRS register is queryable, stating "we assume it is not
+    # classified" next to a conclusive classification would be a false
+    # limitation on a report a buyer may act on -- so the assumption downgrades
+    # to a finding, and survives verbatim only when the check could not be made.
+    if risc_seismic and risc_seismic.get("concludent"):
+        sursa_rs = f"registrul AMCCRS, {risc_seismic.get('adresa_registru')}"
+        add(f"4. **Structura de rezistență** — {risc_seismic['eticheta']}, verificat în "
+            f"{sursa_rs}. Încadrarea nu a fost reflectată numeric în grila de comparabile; "
+            "este raportată ca fapt și tratată în secțiunea de riscuri.")
+    elif risc_seismic and risc_seismic.get("verificat"):
+        add(f"4. **Structura de rezistență** — {risc_seismic['rezumat']} "
+            "Se menține ca ipoteză neverificată la nivel de imobil.")
+    else:
+        add("4. **Structura de rezistență** — se presupune neîncadrată în clasă de risc seismic.")
     add("5. **Prețurile comparabilelor** sunt prețuri de ofertă, nu de tranzacție. Conform "
         "GEV 630 §53, importanța acordată lor a fost modulată în funcție de timpul de expunere "
         "pe piață al fiecărei oferte.")
@@ -280,11 +295,16 @@ def render(v: Valuation, *, comps_source: str, rents_source: str,
     add("| Factor | Constatare |")
     add("|---|---|")
     year = s.get("year_built")
-    seismic = ("**Risc ridicat** — construcție anterioară normativului seismic din 1978. "
-               "Se verifică obligatoriu lista clădirilor expertizate a PMB."
-               if year and year < 1978 else
-               "Construcție ulterioară normativului din 1978." if year else
-               "An de construcție nepublicat — risc seismic neevaluabil.")
+    if risc_seismic and risc_seismic.get("concludent"):
+        seismic = f"**{risc_seismic['eticheta']}** — {risc_seismic['rezumat']}."
+    elif risc_seismic and risc_seismic.get("verificat"):
+        seismic = risc_seismic["rezumat"]
+    else:
+        seismic = ("**Risc ridicat** — construcție anterioară normativului seismic din 1978. "
+                   "Se verifică obligatoriu lista clădirilor expertizate a PMB."
+                   if year and year < 1978 else
+                   "Construcție ulterioară normativului din 1978." if year else
+                   "An de construcție nepublicat — risc seismic neevaluabil.")
     add(f"| Risc seismic | {seismic} |")
     add("| Performanță energetică | Certificatul energetic nu este publicat în anunț. "
         "Clasa energetică influențează atât costul de exploatare, cât și lichiditatea la revânzare. |")

@@ -156,7 +156,42 @@ o declară în propriul docstring: raportul se atașează, nu se recită. **Repa
 rămâne în raport și în unealta dedicată; adaptorul de dosar întoarce lista secțiunilor
 disponibile în locul dosarului.
 
-### P8 — `ruff check .` pica deja pe `main`
+### P8 — Tabelul de comparabile: fără linkuri, cu duplicate și cu o distanță inventată
+
+Trei defecte în aceeași secțiune — cea pe care cumpărătorul o folosește ca să verifice
+evaluarea:
+
+- **Fără linkuri.** `_comparabila_dict` trimitea `url`, dar niciunul dintre cele *două*
+  tabele din `ValuationMeter.jsx` nu îl randa, iar PDF-ul afișa doar id-ul. Comparabilele
+  nu puteau fi deschise și verificate. **Reparat** în ambele tabele web (link + id sub el)
+  și în PDF (`<link href>` pe fiecare rând). Raportul markdown le lega deja corect.
+- **Duplicate.** `dedupe` rula *după* selecția primelor N, deci un apartament listat de
+  două ori consuma două locuri din cele 12 și grila ieșea cu un comparabil mai puțin, fără
+  să spună de ce. În plus cheia nu prindea relistarea cu un câmp golit. **Reparat:**
+  deduplicare înainte de ranking, a doua trecere pe `(preț, suprafață)` care fuzionează
+  doar când câmpurile publicate de ambele coincid, iar supraviețuitorul este înregistrarea
+  cu cele mai multe date — nu prima văzută.
+- **Distanță inventată.** O distanță nepublicată se afișa ca `< 1 km`. `_comparabila_dict`
+  trimite `None` tocmai ca să nu se afirme asta. **Reparat:** „nepublicat”.
+- **PDF trunchiat la 6 rânduri** dintr-o grilă de 12, iar o ajustare lipsă se afișa ca
+  `0.0%` (adică „nu necesită ajustare”). **Reparat:** toate rândurile, `n/a` pentru ce
+  nu s-a calculat.
+
+### P9 — Crash în PDF la evaluare fără procent de ajustare
+
+`f"{ajustare_pct:+.1f}%"` cu `ajustare_pct is None` arunca `TypeError` și pica întreaga
+generare a PDF-ului, pentru orice evaluare care raporta marja în euro dar nu și în
+procente. Preexistent, descoperit de un test nou. **Reparat.**
+
+### P10 — `reguli_de_aur` și `abandon_recomandat` erau produse și nerandate
+
+Cele 10 reguli de aur ajungeau în payload și nu le citea nimeni. Iar
+`abandon_recomandat` nu putea fi niciodată `true`: niciun steag nu afirmă o clasă
+seismică sau un litigiu neverificat, deci `any(flag.abandon)` era mereu fals. **Reparat:**
+regulile se randează în web și în PDF, iar abandonul are acum o condiție demonstrabilă —
+bugetul al cărui plafon cade sub oferta de deschidere.
+
+### P11 — `ruff check .` pica deja pe `main`
 
 160 de erori în `generator_pdf.py` (E501 + importuri nefolosite), independent de
 modificările de față. Reduse la 141 ca efect secundar; restul rămâne datorie tehnică.
