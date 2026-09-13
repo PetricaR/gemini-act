@@ -146,9 +146,7 @@ def test_property_tools_are_gated_on_their_flag():
     on = build_agent(_settings(imobiliare_enabled=True), token_service=None)
     off = build_agent(_settings(imobiliare_enabled=False), token_service=None)
     assert len(on.tools) - len(off.tools) == len(IMOBILIARE_TOOLS)
-    assert not any(
-        getattr(t, "__name__", "") == "evalueaza_proprietate" for t in off.tools
-    )
+    assert not any(getattr(t, "__name__", "") == "evalueaza_proprietate" for t in off.tools)
 
 
 def test_agent_with_token_service_adds_one_toolset_per_enabled_server(token_service, monkeypatch):
@@ -367,3 +365,110 @@ def test_agent_receives_instruction_as_a_callable():
 
     agent = build_agent(_settings(), token_service=None)
     assert agent.instruction is build_instruction
+
+
+# --- live (voice) mode ---
+
+
+def test_live_agent_runs_on_a_live_model():
+    """The Chat model cannot hold a bidirectional audio session at all, so live
+    mode is a different model rather than a flag on the same one."""
+    from google.adk.models import Gemini
+
+    agent = build_agent(_settings(), token_service=None, live=True)
+    assert isinstance(agent.model, Gemini)
+    assert agent.model.model == _settings().live_model
+
+
+def test_live_agent_keeps_every_tool_the_chat_agent_has():
+    """Voice is a different way in, not a reduced agent."""
+    spoken = build_agent(_settings(), token_service=None, live=True)
+    typed = build_agent(_settings(), token_service=None)
+    assert len(spoken.tools) == len(typed.tools) == _base_tool_count()
+
+
+def test_live_model_is_pinned_to_the_gemini_api_backend_when_a_key_is_set():
+    """The newest live model is only served by AI Studio while the rest of this
+    app talks to Vertex, so the live model needs a client of its own —
+    `vertexai=False` is what stops it inheriting GOOGLE_GENAI_USE_VERTEXAI."""
+    agent = build_agent(_settings(live_api_key="test-key"), token_service=None, live=True)
+    assert agent.model.client_kwargs == {"vertexai": False, "api_key": "test-key"}
+
+
+def test_live_model_without_a_key_falls_back_to_the_process_backend():
+    agent = build_agent(_settings(live_api_key=""), token_service=None, live=True)
+    assert agent.model.client_kwargs is None
+
+
+def test_live_voice_reaches_the_speech_config():
+    agent = build_agent(_settings(live_voice="Kore"), token_service=None, live=True)
+    voice_config = agent.model.speech_config.voice_config
+    assert voice_config.prebuilt_voice_config.voice_name == "Kore"
+
+
+def test_live_language_is_left_unset_by_default():
+    """Empty means the native-audio model answers in whatever language it is
+    spoken to in — pinning one is the exception, not the default."""
+    agent = build_agent(_settings(), token_service=None, live=True)
+    assert agent.model.speech_config.language_code is None
+
+
+def test_live_language_reaches_the_speech_config_when_pinned():
+    agent = build_agent(_settings(live_language="ro-RO"), token_service=None, live=True)
+    assert agent.model.speech_config.language_code == "ro-RO"
+
+
+def test_live_voice_is_case_insensitive():
+    assert _settings(live_voice="kore").live_voice == "Kore"
+
+
+def test_unknown_live_voice_is_rejected_at_startup():
+    """Otherwise the Live API closes the audio socket with a bare 1007 after
+    the user has already clicked the microphone."""
+    with pytest.raises(ValidationError, match="Unknown live voice"):
+        _settings(live_voice="Gandalf")
+
+
+def test_live_thinking_level_is_independent_of_the_chat_one():
+    """Thinking time that is invisible in Chat is dead air mid-sentence."""
+    from google.genai import types
+
+    settings = _settings(thinking_level="HIGH", live_thinking_level="MINIMAL")
+    spoken = build_agent(settings, token_service=None, live=True)
+    typed = build_agent(settings, token_service=None)
+    assert spoken.generate_content_config.thinking_config.thinking_level is (
+        types.ThinkingLevel.MINIMAL
+    )
+    assert typed.generate_content_config.thinking_config.thinking_level is (
+        types.ThinkingLevel.HIGH
+    )
+
+
+def test_unknown_live_thinking_level_is_rejected_at_startup():
+    with pytest.raises(ValidationError, match="Unknown thinking level"):
+        _settings(live_thinking_level="DEEP")
+
+
+def test_spoken_instruction_forbids_the_markers_it_would_otherwise_read_aloud():
+    """In live mode there is no `runner.py` to strip an A2UI/attachment payload
+    back out, so a marker plus its JSON would be spoken character by character."""
+    from gemini_act.agent.prompts import build_live_instruction
+
+    text = build_live_instruction()
+    assert "spoken conversation" in text
+    assert "Never emit a marker line or a JSON block" in text
+
+
+def test_spoken_instruction_keeps_the_rest_of_the_agent_intact():
+    """Same agent, said out loud — the tool rules must not fork into a second
+    text that drifts from the one Chat uses."""
+    from gemini_act.agent.prompts import SYSTEM_INSTRUCTION, build_live_instruction
+
+    assert SYSTEM_INSTRUCTION in build_live_instruction()
+
+
+def test_live_agent_receives_the_spoken_instruction():
+    from gemini_act.agent.prompts import build_live_instruction
+
+    agent = build_agent(_settings(), token_service=None, live=True)
+    assert agent.instruction is build_live_instruction

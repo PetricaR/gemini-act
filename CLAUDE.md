@@ -15,6 +15,8 @@ uv sync                 # install deps from uv.lock
 make dev                # ADK dev UI at localhost:8000, runs the agent anonymously (no Chat user
                          # -> no Workspace OAuth token -> Workspace MCP toolsets excluded; business
                          # and Chat tools still work). Right loop for iterating on prompts/schemas.
+make voice               # same dev UI, for talking to the agent out loud: pick `live_agent`,
+                         # click the microphone (see "Voice" below)
 make serve               # Chat webhook locally on :8080 (uvicorn --reload)
 make tunnel               # cloudflared tunnel to :8080, for real Chat -> webhook E2E testing
 make test                 # uv run pytest -q
@@ -74,6 +76,7 @@ Three non-obvious things worth knowing before changing this:
 | `src/gemini_act/oauth/` | Consent flow and per-user token store |
 | `src/gemini_act/runner.py` | ADK `Runner` wiring: one agent turn, Chat text in → reply text out |
 | `agents/chat_agent/` | `adk web` entry point (anonymous mode, used by `make dev`) |
+| `agents/live_agent/` | Same agent on a Live model, for voice (`make voice`) |
 
 ## Adding tools
 
@@ -142,6 +145,32 @@ keeps it in the *returned* string for `chat/events.py` to parse and act on. Stre
 (`chat_streaming_enabled`) rewrites an in-place placeholder message as the model writes, throttled
 by `chat_stream_interval_seconds` to stay inside Chat's per-minute write quota — not just for
 smoothness.
+
+## Voice (`agents/live_agent/`, `Settings.live_*`)
+
+Speaking to the agent is a different wire protocol, not a setting: ADK's live mode holds one
+bidirectional audio session open (`Runner.run_live`) and only Gemini's **Live** model family can
+serve one — `gemini-3.8-flash` does not degrade there, it never connects. So `build_agent(live=True)`
+swaps three things and nothing else: the model, its thinking budget, and the instruction. Same
+tools, same everything else, on purpose — the confirm-before-writing rule and the treatment of MCP
+output as data have to hold identically whether the user types or speaks.
+
+- **The live model runs on a different backend from the rest of the app.**
+  `gemini-3.1-flash-live-preview` (native audio in and out, no STT→LLM→TTS chain) is served only by
+  the Gemini API (AI Studio); Vertex carries `gemini-live-2.5-flash-native-audio` under a different
+  id. Since this app is on Vertex, `build_live_model` hands that one model its own
+  `google.genai.Client` via ADK's `client_kwargs` (`vertexai=False` + `live_api_key`). Dropping the
+  key is a valid second mode, but then `live_model` must be the Vertex id or the socket 404s.
+- **The instruction is a prefix over the Chat one, not a copy** (`prompts.py::LIVE_PREFIX`). It has
+  to override the Chat presentation layer specifically: `*bold*` is audible as "asterisk", and an
+  A2UI/attachment marker line would be read out as JSON, since in live mode there is no `runner.py`
+  between the model and the user to strip it back out.
+- `live_thinking_level` is separate from `thinking_level` deliberately — thinking time that is
+  invisible in Chat is dead air mid-sentence.
+- The live model supports fewer capabilities than `model`: no `url_context`, no structured output,
+  no caching. Web research still works because it is a sub-agent on `model`, called like any other
+  function tool (`agent/tools/search.py`).
+- Same anonymous limitation as `make dev`: `adk web` has no Chat user, so no Workspace tools.
 
 ## Configuration
 

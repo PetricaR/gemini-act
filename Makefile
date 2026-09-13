@@ -1,4 +1,4 @@
-.PHONY: help install install-obscura local dev serve tunnel test lint fmt setup deploy deploy-adk-ui
+.PHONY: help install install-obscura local dev voice serve tunnel test lint fmt setup deploy deploy-adk-ui
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -13,6 +13,10 @@ local:  ## Run the full app locally (FastAPI backend + React Web UI)
 	./start_local.sh
 
 dev:  ## ADK dev UI (anonymous mode — no Workspace tools)
+	uv run adk web agents
+
+voice:  ## Talk to the agent out loud (ADK dev UI, pick `live_agent`, click the mic)
+	@echo "Open http://localhost:8000, select the \033[1mlive_agent\033[0m agent, then click the microphone."
 	uv run adk web agents
 
 serve:  ## Run the Chat webhook locally on :8080

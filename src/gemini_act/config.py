@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Google Workspace MCP servers, resolved through Cloud Agent Registry rather than
@@ -171,12 +171,28 @@ CHAT_BOT_SCOPE = "https://www.googleapis.com/auth/chat.bot"
 # the enum happens in `agent/factory.py`.
 THINKING_LEVELS: frozenset[str] = frozenset({"MINIMAL", "LOW", "MEDIUM", "HIGH"})
 
+# Prebuilt voices the Live models can speak with (`Settings.live_voice`).
+# Validated at startup on purpose: a name the backend does not know is not
+# rejected with a readable error but closes the audio websocket with a bare
+# `1007 invalid argument` once the user has already clicked the microphone.
+# Google adds voices from time to time — extend this set rather than dropping
+# the check.
+LIVE_VOICES: frozenset[str] = frozenset(
+    {"Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"}
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="GEMINI_ACT_",
         env_file=".env",
         extra="ignore",
+        # Fields that declare an alias (the unprefixed Google variables below,
+        # `live_api_key`) are otherwise settable *only* by that alias: passing
+        # the field name is silently dropped rather than rejected, leaving the
+        # default in place. That is a footgun for callers constructing Settings
+        # directly, tests above all.
+        populate_by_name=True,
     )
 
     # Vertex AI. These two are read by ADK under their unprefixed names, so they
@@ -198,6 +214,54 @@ class Settings(BaseSettings):
     # value leaves the model's own default in place (which is what this service
     # ran with before, and why replies took as long as they did).
     thinking_level: str = "LOW"
+
+    # --- Live (voice) mode ---
+    # Speaking to the agent is a different wire protocol, not a flag on `model`
+    # above: ADK's live mode holds one bidirectional audio session open
+    # (`Runner.run_live`, the microphone in `adk web`) and only the Live model
+    # family can serve one. `gemini-3.8-flash` does not degrade gracefully
+    # there — it never connects. So the live entry point (`agents/live_agent/`)
+    # runs the same tools and the same instruction on a second model.
+    #
+    # gemini-3.1-flash-live-preview is the current one: audio in, audio out,
+    # natively, with no speech-to-text -> LLM -> text-to-speech chain in
+    # between, which is what keeps interruptions and tone intact across the
+    # round trip. It is served *only* by the Gemini API (AI Studio) backend;
+    # Vertex carries the older `gemini-live-2.5-flash-native-audio` (GA) under
+    # that different id. Note it supports fewer capabilities than `model`
+    # above: no `url_context`, no structured output, no caching — the web
+    # research tool still works because it is a sub-agent on `model`, called
+    # like any other function tool (see `agent/tools/search.py`).
+    live_model: str = "gemini-3.1-flash-live-preview"
+    # API key for the Gemini API backend, used by the live model *only* — the
+    # rest of the process keeps talking to Vertex with ADC. Read from
+    # GEMINI_ACT_LIVE_API_KEY, else GEMINI_API_KEY / GOOGLE_API_KEY, which is
+    # where an AI Studio key normally already lives.
+    #
+    # Leaving it empty is a deliberate second mode, not a broken one: the live
+    # model then goes to the process-wide backend (Vertex), where `live_model`
+    # must be set to `gemini-live-2.5-flash-native-audio` — the 3.1 id 404s
+    # there, since Vertex does not serve it.
+    live_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "GEMINI_ACT_LIVE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"
+        ),
+    )
+    # Which prebuilt voice answers. Empty leaves the model's own default.
+    live_voice: str = "Puck"
+    # BCP-47 code for the spoken answer, e.g. "ro-RO". Empty is the normal
+    # setting: the native-audio models detect the language being spoken and
+    # answer in it, so pinning one here mainly serves a deployment that must
+    # always answer in the same language whatever it is asked in.
+    live_language: str = ""
+    # Thinking budget for voice, separate from `thinking_level` because the
+    # trade-off is not the same one. In Chat a second or two of thought is
+    # invisible next to the round trip; in a spoken conversation it is dead air
+    # in the middle of a sentence, and the model is answering conversationally
+    # rather than planning a five-tool report. MINIMAL is that trade; raise it
+    # if spoken answers turn shallow on multi-step requests.
+    live_thinking_level: str = "MINIMAL"
 
     # Chat webhook
     chat_audience: str = ""
@@ -374,7 +438,7 @@ class Settings(BaseSettings):
             return tuple(part.strip() for part in value.split(",") if part.strip())
         return value
 
-    @field_validator("thinking_level", mode="before")
+    @field_validator("thinking_level", "live_thinking_level", mode="before")
     @classmethod
     def _normalise_thinking_level(cls, value: object) -> object:
         """Accept `low`/`Low`/`LOW`, and fail at startup on a typo.
@@ -391,6 +455,24 @@ class Settings(BaseSettings):
                 "(or empty to use the model default)"
             )
         return level
+
+    @field_validator("live_voice", mode="before")
+    @classmethod
+    def _normalise_live_voice(cls, value: object) -> object:
+        """Accept `puck`/`Puck`, and fail at startup on an unknown voice.
+
+        See `LIVE_VOICES` for why this is checked here rather than left to the
+        Live API to reject mid-call.
+        """
+        if not isinstance(value, str):
+            return value
+        voice = value.strip().capitalize()
+        if voice and voice not in LIVE_VOICES:
+            raise ValueError(
+                f"Unknown live voice: {value}. Known: {', '.join(sorted(LIVE_VOICES))} "
+                "(or empty to use the model default)"
+            )
+        return voice
 
     @field_validator("mcp_enabled", mode="after")
     @classmethod

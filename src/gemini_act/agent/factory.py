@@ -7,9 +7,10 @@ from functools import lru_cache
 from typing import Any
 
 from google.adk import Agent
+from google.adk.models import Gemini
 from google.genai import types
 
-from gemini_act.agent.prompts import build_instruction
+from gemini_act.agent.prompts import build_instruction, build_live_instruction
 from gemini_act.agent.tools import (
     BUSINESS_TOOLS,
     CHAT_TOOLS,
@@ -26,26 +27,73 @@ from gemini_act.oauth.store import TokenService
 logger = logging.getLogger(__name__)
 
 
-def build_generate_content_config(settings: Settings) -> types.GenerateContentConfig | None:
+def build_generate_content_config(
+    settings: Settings, *, live: bool = False
+) -> types.GenerateContentConfig | None:
     """Model-level generation settings, or None to keep ADK's own defaults.
 
     Only thinking is pinned here — see `Settings.thinking_level` for why it is
-    worth pinning at all. Everything else is deliberately left to ADK so this
-    does not quietly diverge from the library's defaults.
+    worth pinning at all, and `Settings.live_thinking_level` for why voice gets
+    its own budget. Everything else is deliberately left to ADK so this does
+    not quietly diverge from the library's defaults.
     """
-    if not settings.thinking_level:
+    level = settings.live_thinking_level if live else settings.thinking_level
+    if not level:
         return None
     return types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(
-            thinking_level=types.ThinkingLevel(settings.thinking_level)
-        )
+        thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel(level))
     )
+
+
+def build_speech_config(settings: Settings) -> types.SpeechConfig | None:
+    """How the live model should sound, or None to leave that to the model."""
+    if not settings.live_voice and not settings.live_language:
+        return None
+    speech_config = types.SpeechConfig()
+    if settings.live_voice:
+        speech_config.voice_config = types.VoiceConfig(
+            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=settings.live_voice)
+        )
+    if settings.live_language:
+        speech_config.language_code = settings.live_language
+    return speech_config
+
+
+def build_live_model(settings: Settings) -> Gemini:
+    """The model that answers out loud.
+
+    A `Gemini` instance rather than a bare model name, because two things have
+    to travel with it that a name cannot carry: the voice, and — when
+    `live_api_key` is set — a client of its own pointed at the Gemini API
+    backend while the rest of this process talks to Vertex. See
+    `Settings.live_model` for why the newest live model is only reachable that
+    way.
+    """
+    kwargs: dict[str, Any] = {}
+    speech_config = build_speech_config(settings)
+    if speech_config is not None:
+        kwargs["speech_config"] = speech_config
+    if settings.live_api_key:
+        # ADK passes these straight to `google.genai.Client`, for this model
+        # only — `vertexai=False` is what stops it inheriting
+        # GOOGLE_GENAI_USE_VERTEXAI from the environment.
+        kwargs["client_kwargs"] = {"vertexai": False, "api_key": settings.live_api_key}
+    else:
+        logger.warning(
+            "No live API key set: %s will be requested from the process-wide backend. "
+            "On Vertex only gemini-live-2.5-flash-native-audio exists — set "
+            "GEMINI_ACT_LIVE_API_KEY, or GEMINI_ACT_LIVE_MODEL to the Vertex id.",
+            settings.live_model,
+        )
+    return Gemini(model=settings.live_model, **kwargs)
 
 
 def build_agent(
     settings: Settings | None = None,
     token_service: TokenService | None = None,
     mcp_registry: McpRegistry | None = None,
+    *,
+    live: bool = False,
 ) -> Agent:
     """Build the root agent.
 
@@ -58,6 +106,10 @@ def build_agent(
         mcp_registry: Source of the servers each user connected themselves.
             When None, the toolset is left out — the agent then has only the
             tools this deployment ships with.
+        live: Build the agent for a spoken conversation instead of Chat: the
+            live model, its own thinking budget, and an instruction that drops
+            the Chat-only formatting. Same tools either way. See
+            `Settings.live_model` and `agents/live_agent/`.
     """
     settings = settings or get_settings()
     tools: list[Any] = [*BUSINESS_TOOLS, *CHAT_TOOLS, *build_search_tools(settings)]
@@ -74,22 +126,23 @@ def build_agent(
         tools.append(CustomMcpToolset(mcp_registry, settings))
 
     logger.info(
-        "Built agent on %s with %d tool group(s), thinking %s, workspace access %s, "
+        "Built %s agent on %s with %d tool group(s), thinking %s, workspace access %s, "
         "property tools %s, maps %s",
-        settings.model,
+        "live" if live else "chat",
+        settings.live_model if live else settings.model,
         len(tools),
-        settings.thinking_level or "default",
+        (settings.live_thinking_level if live else settings.thinking_level) or "default",
         "on" if token_service else "off",
         "on" if settings.imobiliare_enabled else "off",
         "key" if settings.maps_api_key else "openstreetmap",
     )
     return Agent(
         name="gemini_act",
-        model=settings.model,
+        model=build_live_model(settings) if live else settings.model,
         description="Takes actions in Google Workspace on behalf of a Google Chat user.",
-        instruction=build_instruction,
+        instruction=build_live_instruction if live else build_instruction,
         tools=tools,
-        generate_content_config=build_generate_content_config(settings),
+        generate_content_config=build_generate_content_config(settings, live=live),
     )
 
 

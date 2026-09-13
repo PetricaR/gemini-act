@@ -49,6 +49,7 @@ their own MCP servers at runtime — see below.
 | [src/gemini_act/oauth/](src/gemini_act/oauth/) | Consent flow and per-user token store |
 | [src/gemini_act/runner.py](src/gemini_act/runner.py) | ADK Runner and session wiring |
 | [agents/chat_agent/](agents/chat_agent/) | `adk web` entry point (anonymous mode) |
+| [agents/live_agent/](agents/live_agent/) | Same agent on a Live model, for talking to it out loud |
 
 ## Connecting your own MCP servers
 
@@ -102,6 +103,12 @@ make dev                  # ADK dev UI at localhost:8000
 `make dev` runs the agent **anonymously** — no Chat user means no Workspace access token, so the
 MCP toolsets are left out by design. Business and Chat tools work. It's the right loop for
 iterating on prompts and tool schemas.
+
+To **talk to it out loud**, run `make voice`, select the `live_agent` agent and click the
+microphone. That is the same agent with the same tools, running on a Gemini Live model
+(`gemini-3.1-flash-live-preview` by default) so audio can flow both ways. It needs an AI Studio key
+in `GEMINI_ACT_LIVE_API_KEY` (or `GEMINI_API_KEY`), because that model is not served by Vertex —
+see the live settings in `.env.example`.
 
 ## Google Cloud setup
 

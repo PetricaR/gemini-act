@@ -177,11 +177,10 @@ Open the URL in a browser. IAP asks for a Google sign-in and only lets
 ${IAP_USER} through; every other account gets a 403 at the edge. No gcloud
 proxy needed.
 
-To let someone else in:
+To let someone else in, or to see who is already in:
 
-  gcloud iap web add-iam-policy-binding --resource-type=cloud-run \\
-    --service=${SERVICE} --region=${REGION} --project=${PROJECT} \\
-    --member=user:THEIR_EMAIL --role=roles/iap.httpsResourceAccessor
+  ./deploy/adk_ui/grant_access.sh their.email@example.com
+  ./deploy/adk_ui/grant_access.sh --list
 
 Workspace tools (Gmail/Drive/Calendar) are absent here by design: this runs the
 agent anonymously, the same as \`make dev\`, so there is no Chat user and no

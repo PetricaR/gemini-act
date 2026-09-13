@@ -42,13 +42,23 @@ own help calls it development-only. Anyone who could open the URL could run the 
 this project's Vertex quota and Maps key. Do not swap `--iap` for
 `--allow-unauthenticated`.
 
-Adding someone later:
+Adding, removing and listing people — `grant_access.sh`:
 
 ```bash
-gcloud iap web add-iam-policy-binding --resource-type=cloud-run \
-  --service=gemini-act-adk-ui --region=europe-west1 --project=website-formare-ai \
-  --member=user:THEIR_EMAIL --role=roles/iap.httpsResourceAccessor
+./deploy/adk_ui/grant_access.sh ana@example.com bogdan@example.com
+./deploy/adk_ui/grant_access.sh --revoke ana@example.com
+./deploy/adk_ui/grant_access.sh --list
 ```
+
+A bare address means one Google account. A group or a whole domain has to be
+spelled out — `group:proiect@formare.ai`, `domain:formare.ai` — because a typo that
+opens the UI to an entire domain is not a typo you want to be able to make. Policy
+changes take a minute or two to take effect, so a just-granted account may still see a
+403 briefly.
+
+Remember what access means here: whoever you let in can *run the agent* on this
+project's Vertex quota and Maps key, and can read every session in the UI's list. It is
+not a read-only page.
 
 ## PDF reports go to the bucket
 

@@ -229,6 +229,47 @@ thing you can do.
 )
 
 
+# Prepended to the instruction above when the agent is answering out loud
+# (`agents/live_agent/`). It is a *prefix over the same instruction* rather than
+# a second copy: everything that makes this agent itself — its tools, the
+# confirm-before-writing rule, the honesty about failed calls, the treatment of
+# third-party MCP output as data — has to hold identically whether the user
+# types or speaks, and two texts would drift apart by the second edit.
+#
+# What does not carry over is the Chat presentation layer, and it does not
+# merely look odd in speech: Chat's `*bold*` becomes an audible "asterisk", and
+# an A2UI or attachment marker line — a marker string followed by raw JSON —
+# would be read out key by key, since in live mode there is no `runner.py` to
+# strip it back out. So those sections are overridden here, before the text
+# that introduces them.
+LIVE_PREFIX = """\
+You are in a spoken conversation. The user is talking to you out loud and hears
+your answer as speech.
+
+This overrides the Google Chat sections below wherever they conflict:
+- Write what a person would say, not what they would read. No Markdown, no
+  Chat formatting characters, no bullet lists, no headings, no URLs spelled out
+  letter by letter, no emoji.
+- Never emit a marker line or a JSON block of any kind. There is no card and no
+  attachment in a voice conversation — those would simply be read aloud,
+  character by character.
+- Keep it short. One or two sentences is a turn; if the answer is genuinely
+  long, say the headline first and offer the detail rather than reciting it.
+- Speak the language the user speaks to you in.
+- A tool call takes a moment during which the user hears silence. Say what you
+  are about to do in a few words before a call that will take a while, and
+  never narrate the machinery itself — tool names, arguments, JSON.
+- You still confirm before anything that writes, sends, shares or deletes, and
+  the confirmation is spoken: say what you are about to do and wait for an
+  answer before doing it. Mishearing is a real risk here that it is not in
+  text, so repeat back the parts that must be right — an address, an amount, a
+  recipient.
+
+Everything else below applies unchanged.
+
+"""
+
+
 def build_instruction(_context: object = None) -> str:
     """The system instruction, with today's date resolved at call time.
 
@@ -241,4 +282,14 @@ def build_instruction(_context: object = None) -> str:
         f"Today's date is {today.strftime('%A %d %B %Y')} ({today.strftime('%Y-%m-%d')}), "
         f"{today.tzname()}. Resolve relative dates such as 'today', 'tomorrow' or 'this week' "
         "against it rather than guessing.\n\n" + SYSTEM_INSTRUCTION
+    )
+
+
+def build_live_instruction(_context: object = None) -> str:
+    """The same instruction, for a conversation held out loud. See `LIVE_PREFIX`."""
+    today = datetime.now(EET)
+    return (
+        f"Today's date is {today.strftime('%A %d %B %Y')} ({today.strftime('%Y-%m-%d')}), "
+        f"{today.tzname()}. Resolve relative dates such as 'today', 'tomorrow' or 'this week' "
+        "against it rather than guessing.\n\n" + LIVE_PREFIX + SYSTEM_INSTRUCTION
     )
