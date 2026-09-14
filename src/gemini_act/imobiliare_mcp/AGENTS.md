@@ -315,6 +315,111 @@ flat's. It feeds `raport.render` (special assumption 4 and the ESG table),
 them touches the valuation *number* — the class is reported as a fact and
 argued in the negotiation, not folded into the GEV 630 grid.
 
+## Reference documents from Drive (`drive_docs.py`)
+
+A Google Drive folder, read-only, holding the paperwork a valuation leans on
+but cannot derive: cost catalogues, ANEVAR guidance, developer spec sheets.
+`docx/` is the same idea checked into the repo; this is the version that
+updates by dropping a file in Drive. Three MCP tools sit on it —
+`documente_drive` (list), `citeste_document_drive` (read one, paged through
+`de_la`/`urmatorul_offset`), `cauta_in_documente_drive` (grep the corpus for a
+passage instead of loading whole PDFs into the context).
+
+**A Drive scope does not survive ADC, and it fails silently.**
+`google.auth.default(scopes=[...])` applies scopes only to credentials that can
+be re-scoped. A developer's ADC is an `authorized_user` whose scopes are fixed
+in the refresh token at login — the default `gcloud auth application-default
+login` has no Drive scope, and the requested one is dropped without a word. Fix:
+
+```bash
+gcloud auth application-default login \
+  --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/drive.readonly
+```
+
+On Cloud Run the same hole has a different floor: the metadata server issues a
+`cloud-platform` token, which does not cover Drive, and a service's scopes
+cannot be changed. So `_credentiale_drive` self-impersonates through the IAM
+Credentials API, which *can* mint `drive.readonly` for a service account. That
+is the default rather than a setting, because the alternative is a service that
+works locally and 403s in production. It needs
+`roles/iam.serviceAccountTokenCreator` on the account for itself —
+`deploy/setup_gcp.sh` grants it. `IMOBILIARE_DRIVE_IMPERSONATE` forces the same
+path locally, which is how you reproduce the deployed behaviour.
+
+**The quota project decides which project must have `drive.googleapis.com`
+enabled**, and ADC carries whatever `gcloud` last set — on a machine that works
+on several projects, routinely an unrelated one. `_credentiale_drive` pins it to
+`GOOGLE_CLOUD_PROJECT`; without that the 403 names a project nobody here has
+heard of.
+
+**Drive access is not IAM.** No role on the GCP project grants it. The folder
+has to be *shared* with the identity the process runs as — ADC, so on Cloud Run
+the runtime service account from `deploy/setup_gcp.sh` — exactly the way it
+would be shared with a colleague. Until it is, Drive reports the folder as
+**404 Not Found**, never 403, so "wrong folder id" is the expected symptom of a
+folder nobody ever shared. `_indisponibil` names the principal that needs the
+share rather than quoting the raw error, and `identitate()` is what reads it
+off the live credentials.
+
+Two follow-on traps from the same fact: a service account belongs to no
+Workspace domain, so a domain that blocks external sharing refuses that share
+(fix: a Shared Drive with the account as a member, or domain-wide delegation),
+and it has no Drive storage quota of its own, which is why nothing here copies
+or converts server-side.
+
+Listing a folder on a **Shared Drive** needs both `supportsAllDrives` and
+`includeItemsFromAllDrives`. Without them the call succeeds and returns zero
+files — indistinguishable from an empty folder, and it will not raise.
+
+**A scanned PDF must not extract as `""`.** Pages of images with no text layer
+are the normal state of half the documents anyone uploads, and an empty string
+reads downstream as an empty document rather than as a document that needs OCR.
+`_text_pdf` raises with the page count instead. Same rule as the missing-value
+invariant above. `tests/test_drive_docs.py` builds its PDFs with reportlab and
+reads them back with pypdf precisely so this path is exercised for real.
+
+The extracted text is cached under `paths.cache_dir("drive")` keyed by the
+file's `modifiedTime`, so a re-upload invalidates its own entry and no TTL can
+be wrong; the listing itself carries a short TTL (`LISTING_TTL`) so a turn that
+lists then reads three documents pays one round trip, not four.
+
+## The PDF dossier (`generator_pdf.py`)
+
+**The report cannot use the standard PDF fonts.** Helvetica & co. are Type1
+with WinAnsi encoding — Latin-1 — which has `â` and `î` but not `ă` (U+0103),
+`ș` (U+0219) or `ț` (U+021B). Every heading, table cell and paragraph of a
+Romanian valuation report drew those three as black boxes. `fonts/` therefore
+ships the Roboto family (Apache-2.0) and `_register_fonts()` embeds it; the
+deploy image is `python:3.12-slim`, which has no fonts at all, so discovering
+one on the system is not an option. If registration ever fails the module falls
+back to Helvetica and logs a warning — the report still renders, badly.
+
+Two consequences to keep in mind when editing:
+
+- **Every string bound for a `Paragraph` goes through `_txt()`.** Most of the
+  prose is model-generated or scraped, so it can carry anything; `_txt` maps
+  the decorative glyphs Roboto lacks (`★ ✓ → ⚠`) onto ones it has, normalises
+  `ş/ţ` (cedilla — the wrong letters for Romanian) to `ș/ț`, and drops the
+  rest. Reach for a symbol only after checking it is in the font.
+- **Images are fitted, never sized.** `Image(path, width=W, height=H)` stretches
+  to exactly W×H; listing photos and 4:3 Street View captures were both being
+  squashed. Use `_imagine_incadrata(path, max_w, max_h)`.
+
+The other recurring bug class here is **a key the payload never emits**, which
+`or` chains turn into a plausible-looking default rather than a visible gap:
+`venit_net_anual_eur` read as `venit_net_anual_noi_eur` printed `0 EUR/an`
+under a real rent, and `calitate` read as `nivel_calitate` graded every finish
+"Medie" next to a score of 9,2. When adding a row, check the key against
+`api/demo_data.py` and prefer a dash over a flattering default — a fallback
+that asserts a finding ("Trotuare pietonale conforme") is worse than an empty
+cell, because nobody inspected those trotuare.
+
+Also watch the **two percentages that mean opposite things**: the correction
+recommended against the asking price (`ajustare_recomandata_procent`, negative
+when the flat is dear) and the excess of the asking price over the estimate
+(`ecart_pct`, computed locally, positive for the same flat). Printing one under
+the other's label produced "cu −4,9% peste nivelul pieței".
+
 ## Conventions
 
 Tool names and filter fields are **Romanian** (`cauta`, `pret_max`, `camere`),

@@ -28,7 +28,18 @@ except ImportError:  # pragma: no cover - depends on which SDK major is installe
     from mcp.server.fastmcp import FastMCP as MCPServer
 from pydantic import BaseModel, Field
 
-from . import comps, costuri, imo360, imoradar, locatie, maps, negociere, paths, viziune
+from . import (
+    comps,
+    costuri,
+    drive_docs,
+    imo360,
+    imoradar,
+    locatie,
+    maps,
+    negociere,
+    paths,
+    viziune,
+)
 from .anevar import Params, dedupe, evaluate, is_furnished
 from .client import ImobiliareClient, SessionError
 from .galerie import contact_sheet
@@ -640,7 +651,11 @@ def cauta_imoradar(
       `sources`, with `price_spread_pct` between them.
 
     Needs no session, unlike `cauta`. `oferta_totala` is a de-duplicated count
-    of properties, not of ads, so it can be quoted as supply directly.
+    of properties, not of ads, so it can be quoted as supply directly --
+    unlike `portaluri`, which breaks down only the pool that was read and is
+    not the market's split across portals. `zona_rezolvata` says which
+    published location the name resolved to, and lists the alternatives when
+    it was ambiguous.
     """
     filters = filtre or Filters()
     with imoradar.ImoradarClient() as client:
@@ -678,11 +693,11 @@ def cauta_imoradar(
             max_results=pool,
         )
 
-    # `imo360.dedupe` rather than one of this module's own: it collapses on
-    # (price, surface, rooms, address), which is source-agnostic, and this
-    # portal still re-advertises within a page even though it merges across
-    # portals -- 14 of 90 on one Titan pull.
-    records = imo360.dedupe([imoradar.normalise(listing) for listing in page.listings])
+    # `imoradar.dedupe`, deliberately not `imo360.dedupe`: this portal already
+    # merges an ad's copies upstream, and its listings mostly publish no street
+    # address, so imo360's key degenerates to price + surface + rooms and
+    # merges different flats. See the note above `imoradar.dedupe`.
+    records = imoradar.dedupe([imoradar.normalise(listing) for listing in page.listings])
     # Dropped by default and counted, exactly as `cauta_imo360` does it: the
     # default sort is price per sqm ascending, so a 476 EUR rent filed as a
     # sale would otherwise lead every search of the owner segment.
@@ -2613,6 +2628,106 @@ def genereaza_raport_complet_pdf(
             f"Specificații Tehnice Dezvoltator, Due Diligence Financiar Targetare.ro, "
             f"Recenzii Google Maps și Checklist Tehnic de Recepție."
         ),
+    }
+
+
+# -- Documente de referință din Google Drive -------------------------------
+#
+# Folderul este citit cu identitatea procesului (ADC — pe Cloud Run, contul de
+# serviciu al serviciului), deci trebuie partajat cu acel cont ca Viewer.
+# `drive_docs` explică de ce un folder nepartajat raportează 404 și nu 403.
+
+
+@mcp.tool()
+def documente_drive(
+    reincarca: Annotated[
+        bool, Field(description="Ignoră listarea din cache și interoghează Drive din nou")
+    ] = False,
+) -> dict[str, Any]:
+    """Listează documentele de referință din folderul Google Drive configurat.
+
+    Subfolderele sunt parcurse. Folosește asta întâi, ca să afli ce documente
+    există, apoi `citeste_document_drive` pentru unul anume sau
+    `cauta_in_documente_drive` ca să găsești un pasaj fără a citi tot.
+    """
+    try:
+        documente = drive_docs.listeaza(reincarca=reincarca)
+    except drive_docs.DriveIndisponibil as exc:
+        return {"status": "error", "error_message": str(exc)}
+    return {
+        "status": "success",
+        "folder_id": drive_docs.folder_id(),
+        "citit_ca": drive_docs.identitate(),
+        "count": len(documente),
+        "documente": [d.dict() for d in documente],
+    }
+
+
+@mcp.tool()
+def citeste_document_drive(
+    identificator: Annotated[
+        str,
+        Field(
+            description=(
+                "Numele documentului așa cum apare în listare (sau o parte din el), "
+                "calea lui, ori id-ul Drive"
+            )
+        ),
+    ],
+    de_la: Annotated[int, Field(description="Caracterul de la care se continuă citirea", ge=0)] = 0,
+    max_caractere: Annotated[
+        int,
+        Field(description="Cât text să se întoarcă într-un singur apel", ge=500, le=200_000),
+    ] = 20_000,
+) -> dict[str, Any]:
+    """Citește textul unui document din folderul de referință Drive.
+
+    Merge pe PDF, Google Docs/Sheets/Slides, .docx și text simplu. Un document
+    lung se citește pe bucăți: dacă răspunsul are `trunchiat: true`, reia cu
+    `de_la` = `urmatorul_offset`.
+    """
+    try:
+        doc, text = drive_docs.citeste(identificator)
+    except drive_docs.DriveIndisponibil as exc:
+        return {"status": "error", "error_message": str(exc)}
+    bucata = text[de_la : de_la + max_caractere]
+    sfarsit = de_la + len(bucata)
+    return {
+        "status": "success",
+        "document": doc.cale,
+        "id": doc.id,
+        "tip": doc.tip,
+        "caractere_total": len(text),
+        "trunchiat": sfarsit < len(text),
+        "urmatorul_offset": sfarsit if sfarsit < len(text) else None,
+        "text": bucata,
+    }
+
+
+@mcp.tool()
+def cauta_in_documente_drive(
+    termen: Annotated[
+        str, Field(description="Textul căutat, literal, fără diacritice obligatorii")
+    ],
+) -> dict[str, Any]:
+    """Caută un termen în toate documentele din folderul de referință Drive.
+
+    Întoarce fragmentele din jurul fiecărei apariții, ca să poți răspunde fără
+    să citești documentul întreg. Documentele care nu au putut fi citite sunt
+    raportate explicit, nu sărite în tăcere.
+    """
+    try:
+        rezultate = drive_docs.cauta(termen)
+    except drive_docs.DriveIndisponibil as exc:
+        return {"status": "error", "error_message": str(exc)}
+    gasite = [r for r in rezultate if "document" in r]
+    necitite = next((r["documente_necitite"] for r in rezultate if "documente_necitite" in r), [])
+    return {
+        "status": "success",
+        "termen": termen,
+        "documente_cu_potrivire": len(gasite),
+        "rezultate": gasite,
+        "documente_necitite": necitite,
     }
 
 

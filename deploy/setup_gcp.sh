@@ -79,6 +79,20 @@ for ROLE in roles/aiplatform.user roles/datastore.user roles/logging.logWriter r
   echo "    ${ROLE}"
 done
 
+# Self-impersonation, so the runtime account can mint itself a token carrying a
+# Workspace scope. The metadata server only ever issues `cloud-platform`, which
+# does not cover Drive, and a Cloud Run service's scopes cannot be changed — so
+# reading the reference documents folder (`imobiliare_mcp/drive_docs.py`) goes
+# through the IAM Credentials API instead, and that needs the account to be a
+# token creator on itself. Without this the deployed service fails at Drive with
+# 403 insufficientPermissions while a developer machine works fine.
+echo "==> Self-impersonation (Drive scope for the runtime account)"
+gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
+  --member="serviceAccount:${SA_EMAIL}" \
+  --role="roles/iam.serviceAccountTokenCreator" \
+  --condition=None >/dev/null
+echo "    roles/iam.serviceAccountTokenCreator on itself"
+
 cat <<EOF
 
 ==> Setup complete.
@@ -98,4 +112,8 @@ Still to do by hand (see README.md):
   4. Grant Google Chat permission to invoke the service (deploy script does this).
   5. Google Chat API configuration page: set the HTTP endpoint URL to the
      Cloud Run URL and register the slash commands.
+  6. Share the Drive folder of reference documents
+     (IMOBILIARE_DRIVE_FOLDER_ID) with ${SA_EMAIL} as Viewer. Drive access is
+     not IAM: no role above grants it, only that share does. Until then Drive
+     reports the folder as 404 Not Found, never 403.
 EOF

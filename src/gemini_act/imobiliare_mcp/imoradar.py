@@ -569,6 +569,81 @@ def _days_since(iso_date: str | None) -> int | None:
     return max(0, (datetime.now(UTC) - first).days)
 
 
+# -- duplicates -----------------------------------------------------------
+#
+# This source needs a *weaker* rule than `imo360.dedupe`, not the same one,
+# and using imo360's here was measurably wrong: on 180 listings from Titan it
+# collapsed 15, of which several were plainly different flats -- 115.000 €
+# 41 mp `semidecomandat` merged with 115.000 € 41 mp `decomandat`, 197.999 €
+# 72 mp likewise. Two reasons it misfires here:
+#
+# * imo360 discriminates on the address, which it publishes for most listings.
+#   Here the address is only kept when the seller gave a street (3-8% of
+#   listings; see `exact_location`), so for nearly every record that component
+#   of the key is `None` and the merge falls back to price + surface + rooms
+#   alone. In panel-block stock that is a description of dozens of flats.
+# * The heavy re-advertising imo360 fights has already been dealt with
+#   upstream: this portal merges an ad's copies into one record with
+#   `sellerSources` (18 of 180 in Titan, 49 of 180 in Militari), and listing
+#   ids came back unique on every page sampled (180 of 180, twice).
+#
+# So this merges only on evidence that two records are the same property: the
+# same id, a shared photograph, or a full match *including* a real street
+# address. Measured on the same 360 listings, that is zero false merges and
+# zero missed ones -- no two records shared a photograph at all.
+_EVIDENCE = ("year_built", "floor", "floors_total", "rooms", "description", "seller_type")
+
+
+def _completeness(record: dict[str, Any]) -> int:
+    return sum(1 for f in _EVIDENCE if record.get(f) is not None) + len(
+        record.get("image_urls") or []
+    )
+
+
+def dedupe(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse re-advertisements of the same property, keeping the fullest.
+
+    Order is preserved -- it is the caller's ranking, and re-sorting here
+    would quietly override the sort they asked for.
+    """
+    seen_ids: set[Any] = set()
+    index: dict[Any, int] = {}
+    out: list[dict[str, Any]] = []
+
+    def keys(record: dict[str, Any]) -> list[Any]:
+        found: list[Any] = [("photo", url) for url in record.get("image_urls") or []]
+        address = (record.get("address_text") or "").strip().lower()
+        # Without a street the remaining fields describe a type of flat, not a
+        # flat, so they are not allowed to merge anything.
+        if address and record.get("price_eur") and record.get("surface_sqm"):
+            found.append(
+                ("addr", address, record["price_eur"], record["surface_sqm"], record.get("rooms"))
+            )
+        return found
+
+    for record in records:
+        listing_id = record.get("id")
+        if listing_id is not None:
+            if listing_id in seen_ids:
+                continue
+            seen_ids.add(listing_id)
+
+        found = keys(record)
+        hit = next((index[k] for k in found if k in index), None)
+        if hit is None:
+            for k in found:
+                index[k] = len(out)
+            out.append(record)
+            continue
+        # Same property seen again: keep whichever record says more, and let
+        # the survivor answer to both records' keys.
+        if _completeness(record) > _completeness(out[hit]):
+            out[hit] = record
+        for k in found:
+            index.setdefault(k, hit)
+    return out
+
+
 # -- asking-price history -------------------------------------------------
 #
 # `{"data": [{"date": "10.09.2026", "minPrice": 167000, "maxPrice": 167000}]}`,

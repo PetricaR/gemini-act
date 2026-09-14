@@ -11,12 +11,14 @@ from typing import Any
 from reportlab.lib.colors import HexColor, white
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont as TTFontFile
 from reportlab.pdfgen import canvas
 from reportlab.platypus import (
     HRFlowable,
     Image,
     KeepTogether,
-    PageBreak,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -47,6 +49,113 @@ TINT_AMBER = HexColor("#FEF7E0")
 TINT_RED = HexColor("#FCE8E6")
 
 
+# =============================================================================
+# Unicode typography
+# =============================================================================
+# The standard PDF fonts (Helvetica & co.) are Type1 with WinAnsi encoding,
+# i.e. Latin-1. Of the Romanian alphabet, Latin-1 covers a-circumflex and
+# i-circumflex but NOT a-breve (U+0103), s-comma (U+0219) or t-comma (U+021B)
+# -- those drew as black boxes in every heading, table cell and paragraph of
+# the report. An embedded TTF is the only fix, and it has to be shipped rather
+# than discovered: the deploy image is `python:3.12-slim`, which carries no
+# fonts at all.
+
+FONTS_DIR = Path(__file__).resolve().parent / "fonts"
+
+# Names the rest of the module builds its styles from. These stay "Helvetica"
+# only if registration fails -- the report still renders, with broken
+# diacritics, rather than not rendering.
+FONT_REGULAR = "Helvetica"
+FONT_BOLD = "Helvetica-Bold"
+FONT_ITALIC = "Helvetica-Oblique"
+
+# Codepoints the registered font can actually draw; consulted by `_txt`.
+_GLYPHS_AVAILABLE: set[int] | None = None
+
+# Roboto covers Romanian completely but carries none of the decorative glyphs
+# the report reached for (star, check, arrow, warning), so those map to
+# characters it does have instead of being left as black boxes. The same table
+# normalises s/t written with a cedilla (U+015F/U+0163) -- the wrong form for
+# Romanian, and common in scraped text -- to the comma-below letters.
+_GLYPH_SUBSTITUTIONS = {
+    "\u2605": "*", "\u2606": "*", "\u2713": "-", "\u2714": "-",
+    "\u2717": "x", "\u2718": "x",
+    "\u2192": "\u00bb", "\u2190": "\u00ab", "\u21d2": "\u00bb",
+    "\u25b6": "\u00bb", "\u25ba": "\u00bb",
+    "\u25cf": "\u2022", "\u25aa": "\u2022", "\u25a0": "\u2022",
+    "\u25b2": "^", "\u2026": "...",
+    "\u015f": "\u0219", "\u015e": "\u0218",
+    "\u0163": "\u021b", "\u0162": "\u021a",
+    "\u00a0": " ", "\u2009": " ", "\u202f": " ", "\ufe0f": "",
+}
+
+
+def _register_fonts() -> None:
+    """Load the bundled Roboto family; degrade to Helvetica if it is missing."""
+    global FONT_REGULAR, FONT_BOLD, FONT_ITALIC, _GLYPHS_AVAILABLE
+
+    if "Roboto" in pdfmetrics.getRegisteredFontNames():
+        return
+
+    variants = {
+        "Roboto": "Roboto-Regular.ttf",
+        "Roboto-Bold": "Roboto-Bold.ttf",
+        "Roboto-Italic": "Roboto-Italic.ttf",
+        "Roboto-BoldItalic": "Roboto-BoldItalic.ttf",
+    }
+    try:
+        for name, filename in variants.items():
+            path = FONTS_DIR / filename
+            if not path.exists():
+                raise FileNotFoundError(path)
+            pdfmetrics.registerFont(TTFontFile(name, str(path)))
+        # Without this, <b> and <i> in Paragraph markup cannot find the faces.
+        pdfmetrics.registerFontFamily(
+            "Roboto",
+            normal="Roboto",
+            bold="Roboto-Bold",
+            italic="Roboto-Italic",
+            boldItalic="Roboto-BoldItalic",
+        )
+    except Exception as exc:
+        logger.warning(
+            "Roboto could not be registered (%s); the report falls back to Helvetica "
+            "and Romanian diacritics will render incorrectly.",
+            exc,
+        )
+        return
+
+    FONT_REGULAR, FONT_BOLD, FONT_ITALIC = "Roboto", "Roboto-Bold", "Roboto-Italic"
+    try:
+        _GLYPHS_AVAILABLE = set(pdfmetrics.getFont("Roboto").face.charToGlyph)
+    except Exception:
+        _GLYPHS_AVAILABLE = None
+
+
+def _txt(value: Any) -> str:
+    """Normalise any text on its way into a Paragraph.
+
+    Most of the report's prose comes from the model or from scraped listings,
+    so it can contain any character at all. Anything the font cannot draw would
+    print as a black box, so substitute what has an equivalent and drop the
+    rest -- one stray emoji should not leave a hole in a valuation report.
+    """
+    text = "" if value is None else str(value)
+    for source, target in _GLYPH_SUBSTITUTIONS.items():
+        if source in text:
+            text = text.replace(source, target)
+    if _GLYPHS_AVAILABLE is None:
+        return text
+    if all(ord(ch) in _GLYPHS_AVAILABLE or ch in "\n\r\t" for ch in text):
+        return text
+    return "".join(
+        ch if (ord(ch) in _GLYPHS_AVAILABLE or ch in "\n\r\t") else "" for ch in text
+    )
+
+
+_register_fonts()
+
+
 class NumberedCanvas(canvas.Canvas):
     """Canvas cu două treceri pentru calculul numărului total de pagini și antet/subsol."""
 
@@ -68,7 +177,7 @@ class NumberedCanvas(canvas.Canvas):
 
     def draw_page_decorations(self, total_pages: int) -> None:
         self.saveState()
-        self.setFont("Helvetica", 8)
+        self.setFont(FONT_REGULAR, 8)
         self.setFillColor(GOOGLE_GREY_MUTED)
 
         # Header pe paginile 2+
@@ -93,7 +202,7 @@ class NumberedCanvas(canvas.Canvas):
             "Document generat automat • Conformitate metodologică ANEVAR GEV 630 & SEV 106",
         )
         page_str = f"Pagina {self._pageNumber} din {total_pages}"
-        self.setFont("Helvetica-Bold", 8)
+        self.setFont(FONT_BOLD, 8)
         self.setFillColor(GOOGLE_CHARCOAL)
         self.drawRightString(541, 32, page_str)
 
@@ -108,7 +217,7 @@ def _construieste_stiluri() -> dict[str, ParagraphStyle]:
         "TitluDocument": ParagraphStyle(
             "TitluDocument",
             parent=base_styles["Heading1"],
-            fontName="Helvetica-Bold",
+            fontName=FONT_BOLD,
             fontSize=18,
             leading=22,
             textColor=GOOGLE_BLUE,
@@ -117,7 +226,7 @@ def _construieste_stiluri() -> dict[str, ParagraphStyle]:
         "Subtitlu": ParagraphStyle(
             "Subtitlu",
             parent=base_styles["Normal"],
-            fontName="Helvetica",
+            fontName=FONT_REGULAR,
             fontSize=9.5,
             leading=13,
             textColor=GOOGLE_GREY_MUTED,
@@ -126,7 +235,7 @@ def _construieste_stiluri() -> dict[str, ParagraphStyle]:
         "SectiuneH2": ParagraphStyle(
             "SectiuneH2",
             parent=base_styles["Heading2"],
-            fontName="Helvetica-Bold",
+            fontName=FONT_BOLD,
             fontSize=12,
             leading=16,
             textColor=GOOGLE_CHARCOAL,
@@ -137,7 +246,7 @@ def _construieste_stiluri() -> dict[str, ParagraphStyle]:
         "SectiuneH3": ParagraphStyle(
             "SectiuneH3",
             parent=base_styles["Heading3"],
-            fontName="Helvetica-Bold",
+            fontName=FONT_BOLD,
             fontSize=10,
             leading=13,
             textColor=GOOGLE_BLUE,
@@ -148,7 +257,7 @@ def _construieste_stiluri() -> dict[str, ParagraphStyle]:
         "Corp": ParagraphStyle(
             "Corp",
             parent=base_styles["Normal"],
-            fontName="Helvetica",
+            fontName=FONT_REGULAR,
             fontSize=8.5,
             leading=12,
             textColor=GOOGLE_CHARCOAL,
@@ -157,7 +266,7 @@ def _construieste_stiluri() -> dict[str, ParagraphStyle]:
         "CorpBold": ParagraphStyle(
             "CorpBold",
             parent=base_styles["Normal"],
-            fontName="Helvetica-Bold",
+            fontName=FONT_BOLD,
             fontSize=8.5,
             leading=12,
             textColor=GOOGLE_CHARCOAL,
@@ -165,7 +274,7 @@ def _construieste_stiluri() -> dict[str, ParagraphStyle]:
         "CorpMuted": ParagraphStyle(
             "CorpMuted",
             parent=base_styles["Normal"],
-            fontName="Helvetica",
+            fontName=FONT_REGULAR,
             fontSize=8,
             leading=11,
             textColor=GOOGLE_GREY_MUTED,
@@ -173,7 +282,7 @@ def _construieste_stiluri() -> dict[str, ParagraphStyle]:
         "TabelHeader": ParagraphStyle(
             "TabelHeader",
             parent=base_styles["Normal"],
-            fontName="Helvetica-Bold",
+            fontName=FONT_BOLD,
             fontSize=8,
             leading=10.5,
             textColor=white,
@@ -181,7 +290,7 @@ def _construieste_stiluri() -> dict[str, ParagraphStyle]:
         "TabelCelula": ParagraphStyle(
             "TabelCelula",
             parent=base_styles["Normal"],
-            fontName="Helvetica",
+            fontName=FONT_REGULAR,
             fontSize=8,
             leading=10.5,
             textColor=GOOGLE_CHARCOAL,
@@ -189,7 +298,7 @@ def _construieste_stiluri() -> dict[str, ParagraphStyle]:
         "TabelCelulaBold": ParagraphStyle(
             "TabelCelulaBold",
             parent=base_styles["Normal"],
-            fontName="Helvetica-Bold",
+            fontName=FONT_BOLD,
             fontSize=8,
             leading=10.5,
             textColor=GOOGLE_CHARCOAL,
@@ -197,7 +306,7 @@ def _construieste_stiluri() -> dict[str, ParagraphStyle]:
         "TabelCelulaMuted": ParagraphStyle(
             "TabelCelulaMuted",
             parent=base_styles["Normal"],
-            fontName="Helvetica",
+            fontName=FONT_REGULAR,
             fontSize=7.5,
             leading=10,
             textColor=GOOGLE_GREY_MUTED,
@@ -205,7 +314,7 @@ def _construieste_stiluri() -> dict[str, ParagraphStyle]:
         "CalloutText": ParagraphStyle(
             "CalloutText",
             parent=base_styles["Normal"],
-            fontName="Helvetica",
+            fontName=FONT_REGULAR,
             fontSize=8.5,
             leading=12,
             textColor=GOOGLE_CHARCOAL,
@@ -213,7 +322,7 @@ def _construieste_stiluri() -> dict[str, ParagraphStyle]:
         "BadgeText": ParagraphStyle(
             "BadgeText",
             parent=base_styles["Normal"],
-            fontName="Helvetica-Bold",
+            fontName=FONT_BOLD,
             fontSize=9.5,
             leading=12.5,
             textColor=white,
@@ -272,6 +381,28 @@ def _obtine_cale_imagine_locala(cale_sau_url: str | Any) -> str | None:
     return None
 
 
+def _imagine_incadrata(cale: str, latime_max: float, inaltime_max: float) -> Image | None:
+    """Scale an image to fit a box without distorting it.
+
+    `Image(path, width=W, height=H)` stretches whatever it is given to exactly
+    W x H. Photographs here arrive in whatever shape the seller uploaded and a
+    Street View capture is 4:3, so forcing one ratio squashed faces of
+    buildings and made the contact sheet unreadable. Fit inside the box on the
+    tighter of the two axes and keep the rest of the ratio.
+    """
+    try:
+        latime_nativa, inaltime_nativa = ImageReader(cale).getSize()
+        if not latime_nativa or not inaltime_nativa:
+            return None
+        scara = min(latime_max / latime_nativa, inaltime_max / inaltime_nativa)
+        img = Image(cale, width=latime_nativa * scara, height=inaltime_nativa * scara)
+        img.hAlign = "CENTER"
+        return img
+    except Exception as exc:
+        logger.debug("Nu s-a putut încadra imaginea %s: %s", cale, exc)
+        return None
+
+
 def _creeaza_card_apel(
     text: str,
     stiluri: dict[str, ParagraphStyle],
@@ -284,7 +415,7 @@ def _creeaza_card_apel(
     if titlu:
         continut.append(
             Paragraph(
-                f"<b>{titlu}</b>",
+                f"<b>{_txt(titlu)}</b>",
                 ParagraphStyle(
                     "CalloutTitle",
                     parent=stiluri["CorpBold"],
@@ -295,7 +426,7 @@ def _creeaza_card_apel(
                 ),
             )
         )
-    continut.append(Paragraph(text, stiluri["CalloutText"]))
+    continut.append(Paragraph(_txt(text), stiluri["CalloutText"]))
 
     tabel_card = Table(
         [[continut]],
@@ -315,6 +446,45 @@ def _creeaza_card_apel(
     return tabel_card
 
 
+_CELULE_GOALE = {"", "-", "—", "–", "n/a", "N/A", "None", "nan"}
+
+
+def _elimina_coloane_goale(
+    randuri: list[list[Any]], latimi_coloane: list[float]
+) -> tuple[list[list[Any]], list[float]]:
+    """Drop columns in which no row carries a value, and re-spread their width.
+
+    A column whose every cell is a dash is not a missing value the reader can
+    act on, it is a column the data never filled -- the comparables grid used
+    to print an empty "Dată" column and the sensitivity grid an empty
+    "Parametru Modificat" one. Removing them and giving the space back to the
+    columns that do carry text is what keeps the remaining cells from wrapping
+    one character per line.
+    """
+    if len(randuri) < 2 or len(latimi_coloane) != len(randuri[0]):
+        return randuri, latimi_coloane
+
+    def _goala(celula: Any) -> bool:
+        if isinstance(celula, (Paragraph, Table, Image)):
+            return False
+        return str(celula).strip() in _CELULE_GOALE
+
+    pastrate = [
+        idx
+        for idx in range(len(randuri[0]))
+        if not all(_goala(rand[idx]) for rand in randuri[1:] if idx < len(rand))
+    ]
+    if len(pastrate) == len(randuri[0]) or not pastrate:
+        return randuri, latimi_coloane
+
+    recuperat = sum(latimi_coloane) - sum(latimi_coloane[i] for i in pastrate)
+    bonus = recuperat / len(pastrate)
+    return (
+        [[rand[i] for i in pastrate if i < len(rand)] for rand in randuri],
+        [latimi_coloane[i] + bonus for i in pastrate],
+    )
+
+
 def _formateaza_tabel(
     randuri: list[list[Any]],
     stiluri: dict[str, ParagraphStyle],
@@ -323,20 +493,25 @@ def _formateaza_tabel(
     aliniere_stanga: bool = True,
 ) -> Table:
     """Construiește un tabel profesional cu rânduri alternante și antet Google Blue."""
+    randuri, latimi_coloane = _elimina_coloane_goale(randuri, latimi_coloane)
+
     date_tabel = []
     # Header
     date_tabel.append([
-        celula if isinstance(celula, (Paragraph, Table, Image)) else Paragraph(str(celula), stiluri["TabelHeader"])
+        celula if isinstance(celula, (Paragraph, Table, Image)) else Paragraph(_txt(celula), stiluri["TabelHeader"])
         for celula in randuri[0]
     ])
     # Body
     for rand in randuri[1:]:
         date_tabel.append([
-            celula if isinstance(celula, (Paragraph, Table, Image)) else Paragraph(str(celula), stiluri["TabelCelula"])
+            celula if isinstance(celula, (Paragraph, Table, Image)) else Paragraph(_txt(celula), stiluri["TabelCelula"])
             for celula in rand
         ])
 
-    tab = Table(date_tabel, colWidths=latimi_coloane)
+    # `repeatRows` plus a splittable table: a long grid used to be pushed whole
+    # onto the next page, leaving a third of the previous one blank. It now
+    # flows, and carries its header onto each page it continues on.
+    tab = Table(date_tabel, colWidths=latimi_coloane, repeatRows=1, splitByRow=True)
     stil_tabel = [
         ("BACKGROUND", (0, 0), (-1, 0), col_header_bg),
         ("ALIGN", (0, 0), (-1, -1), "LEFT" if aliniere_stanga else "CENTER"),
@@ -418,7 +593,7 @@ def genereaza_raport_complet_pdf(
     scor_gen = date_proprietate.get("scor_general")
     calif_gen = date_proprietate.get("calificativ_general") or ""
 
-    poveste.append(Paragraph(titlu_proprietate, stiluri["TitluDocument"]))
+    poveste.append(Paragraph(_txt(titlu_proprietate), stiluri["TitluDocument"]))
 
     subtitlu_parts = [f"Adresă: <b>{adresa}</b>"]
     if complex_name:
@@ -429,7 +604,7 @@ def genereaza_raport_complet_pdf(
         subtitlu_parts.append(f"Etaj: <b>{etaj}</b>")
     if camere:
         subtitlu_parts.append(f"Camere: <b>{camere}</b>")
-    poveste.append(Paragraph(" • ".join(subtitlu_parts), stiluri["Subtitlu"]))
+    poveste.append(Paragraph(_txt(" • ".join(subtitlu_parts)), stiluri["Subtitlu"]))
 
     # 1. Sinteză Executivă & Fișă Tehnică Proprietate
     poveste.append(HRFlowable(width="100%", thickness=1, color=GOOGLE_BLUE, spaceBefore=4, spaceAfter=8))
@@ -437,9 +612,16 @@ def genereaza_raport_complet_pdf(
 
     # Card mare de sinteză metrici (Grilă 2 rânduri x 3 coloane)
     val_piata_txt = f"{val_piata:,.0f} {moneda}" if val_piata else "N/A"
-    ajust_txt = (
-        f"{ajustare_pct:+.1f}% (Marjă: ~{marja_eur:,.0f} €)"
-        if ajustare_pct is not None
+    # `ajustare_pct` is the correction recommended against the asking price, a
+    # negative number when the flat is dear. Labelling it "ecart față de piață"
+    # made the badge read "-4,9% above the market" -- the sign of one quantity
+    # under the name of the other. Both are shown, each under its own name.
+    ecart_pct = (
+        (pret / val_piata - 1) * 100 if (pret and val_piata) else None
+    )
+    ecart_txt = (
+        f"{ecart_pct:+.1f}% (~{abs(pret - val_piata):,.0f} {moneda})"
+        if ecart_pct is not None
         else "N/A"
     )
     scor_txt = f"{scor_gen}/10 • {calif_gen}" if scor_gen else "Analiză Automată AI"
@@ -448,12 +630,14 @@ def genereaza_raport_complet_pdf(
         [
             Paragraph(f"<b>PREȚ SOLICITAT</b><br/>{pret:,.0f} {moneda}", stiluri["BadgeText"]),
             Paragraph(f"<b>VALOARE ESTIMATĂ DE PIAȚĂ</b><br/>{val_piata_txt}", stiluri["BadgeText"]),
-            Paragraph(f"<b>ECART FAȚĂ DE PIAȚĂ</b><br/>{ajust_txt}", stiluri["BadgeText"]),
+            Paragraph(
+                f"<b>PREȚ CERUT FAȚĂ DE PIAȚĂ</b><br/>{ecart_txt}", stiluri["BadgeText"]
+            ),
         ],
         [
             Paragraph(f"<b>SUPRAFAȚĂ UTILĂ</b><br/>{suprafata} mp", stiluri["BadgeText"]),
             Paragraph(f"<b>PREȚ / MP UTIL</b><br/>{pret_mp:,.0f} {moneda}/mp", stiluri["BadgeText"]),
-            Paragraph(f"<b>SCOR TEHNIC & RISC GLOBAL</b><br/>{scor_txt}", stiluri["BadgeText"]),
+            Paragraph(f"<b>SCOR TEHNIC & RISC GLOBAL</b><br/>{_txt(scor_txt)}", stiluri["BadgeText"]),
         ],
     ]
     tabel_badge = Table(badge_data, colWidths=[162, 162, 163])
@@ -489,14 +673,17 @@ def genereaza_raport_complet_pdf(
     pf_lista = date_proprietate.get("puncte_forte") or []
     ps_lista = date_proprietate.get("puncte_slabe") or []
     if pf_lista or ps_lista:
+        # The green and amber headers already carry the distinction; the check
+        # and warning marks that used to lead them were glyphs the font has no
+        # drawing for, so they printed as black boxes.
         linii_pf_ps = [[
-            Paragraph("<b>✓ PUNCTE FORTE (AVANTAJE IDENTIFICATE)</b>", stiluri["TabelHeader"]),
-            Paragraph("<b>⚠️ PUNCTE SLABE (FACTORI DE ATENȚIE & RISC)</b>", stiluri["TabelHeader"]),
+            Paragraph("<b>PUNCTE FORTE (AVANTAJE IDENTIFICATE)</b>", stiluri["TabelHeader"]),
+            Paragraph("<b>PUNCTE SLABE (FACTORI DE ATENȚIE & RISC)</b>", stiluri["TabelHeader"]),
         ]]
         max_rows = max(len(pf_lista), len(ps_lista))
         for i in range(max_rows):
-            f_txt = f"• {pf_lista[i]}" if i < len(pf_lista) else ""
-            s_txt = f"• {ps_lista[i]}" if i < len(ps_lista) else ""
+            f_txt = f"• {_txt(pf_lista[i])}" if i < len(pf_lista) else ""
+            s_txt = f"• {_txt(ps_lista[i])}" if i < len(ps_lista) else ""
             linii_pf_ps.append([
                 Paragraph(f_txt, stiluri["TabelCelula"]),
                 Paragraph(s_txt, stiluri["TabelCelula"]),
@@ -521,15 +708,18 @@ def genereaza_raport_complet_pdf(
     # Inserare Foaie de Contact Galerie dacă există
     cale_galerie = date_proprietate.get("cale_galerie")
     if cale_galerie and os.path.exists(cale_galerie):
-        try:
+        # The contact sheet is a tall grid of the seller's photographs. Forcing
+        # it into 487x200 squashed every frame in it; fitted to the text width
+        # and a half-page ceiling, it stays readable and the rows stay square.
+        img_galerie = _imagine_incadrata(cale_galerie, 487, 330)
+        if img_galerie is not None:
             poveste.append(
-                Paragraph("<b>Foaie de Contact Foto Ofertă</b>", stiluri["SectiuneH3"])
+                KeepTogether([
+                    Paragraph("<b>Foaie de Contact Foto Ofertă</b>", stiluri["SectiuneH3"]),
+                    img_galerie,
+                ])
             )
-            img = Image(cale_galerie, width=487, height=200)
-            poveste.append(img)
             poveste.append(Spacer(1, 10))
-        except Exception as exc:
-            logger.debug("Nu s-a putut insera galeria în PDF: %s", exc)
 
     # =========================================================================
     # 2. EVALUARE DE PIAȚĂ ANEVAR (GEV 630) & TOATE ABORDĂRILE
@@ -568,14 +758,24 @@ def genereaza_raport_complet_pdf(
         else:
             interval_txt = " (interval de dispersie în curs de consolidare)"
 
+        # Two quantities that are easy to confuse and were being confused: the
+        # correction recommended against the asking price, and the gap by which
+        # the asking price stands above (or below) the estimate. Each is named
+        # explicitly, because -4,9% and +5,2% describe the same property.
         if ajustare_pct is None:
             ajustare_txt = "Ajustarea față de prețul cerut nu a putut fi calculată."
         else:
-            ajustare_txt = f"Ecart față de prețul solicitat: <b>{ajustare_pct:+.1f}%</b>."
+            ajustare_txt = f"Ajustare recomandată față de prețul cerut: <b>{ajustare_pct:+.1f}%</b>."
+            if ecart_pct is not None:
+                pozitie = "peste" if ecart_pct >= 0 else "sub"
+                ajustare_txt += (
+                    f" Prețul solicitat se află cu <b>{abs(ecart_pct):.1f}%</b> "
+                    f"{pozitie} valoarea estimată."
+                )
 
         fiabilitate = eval_anevar.get("fiabilitate", "medie")
         motiv_fiabilitate = eval_anevar.get("motiv_fiabilitate", "")
-        fiab_text = f" • Fiabilitate: <b>{str(fiabilitate).upper()}</b> ({motiv_fiabilitate})" if motiv_fiabilitate else ""
+        fiab_text = f" • Fiabilitate: <b>{str(fiabilitate).upper()}</b> ({_txt(motiv_fiabilitate)})" if motiv_fiabilitate else ""
 
         card_anevar_text = (
             f"Conform standardului ANEVAR GEV 630 (Metoda Comparației Directe), "
@@ -620,14 +820,19 @@ def genereaza_raport_complet_pdf(
             # it. Each row links to the listing it came from.
             for c in comps:
                 cid = str(c.get("id") or c.get("adresa") or "Comp")
-                eticheta = str(c.get("adresa") or cid)[:40]
+                eticheta = _txt(c.get("adresa") or cid)
                 if url := c.get("url"):
                     eticheta = (
                         f'<link href="{url}" color="#1A73E8">{eticheta}</link>'
-                        f'<br/><font size="6" color="#5F6368">{cid}</font>'
+                        f'<br/><font size="6" color="#5F6368">{_txt(cid)}</font>'
                     )
                 dist = f"{c.get('distanta_km')} km" if c.get("distanta_km") is not None else "-"
-                dt = str(c.get("data_tranzactie") or c.get("data") or "-")
+                dt = str(
+                    c.get("data_tranzactiei")
+                    or c.get("data_tranzactie")
+                    or c.get("data")
+                    or "-"
+                )
                 c_pret = c.get("pret_total") or c.get("pret") or 0
                 c_sup = c.get("suprafata_utila") or c.get("suprafata") or 0
                 c_pmp = c.get("pret_mp") or c.get("pret_mp_eur") or (round(c_pret / c_sup) if c_sup else 0)
@@ -649,7 +854,7 @@ def genereaza_raport_complet_pdf(
                     val_cor_str,
                 ])
             poveste.append(
-                _formateaza_tabel(linii_comps, stiluri, [110, 38, 38, 62, 42, 56, 48, 93])
+                _formateaza_tabel(linii_comps, stiluri, [110, 34, 54, 60, 40, 48, 44, 97])
             )
             poveste.append(Spacer(1, 8))
 
@@ -658,27 +863,50 @@ def genereaza_raport_complet_pdf(
         if ap_venit and isinstance(ap_venit, dict):
             poveste.append(Paragraph("<b>Abordarea prin Venit (Metoda Capitalizării Directe)</b>", stiluri["SectiuneH3"]))
             chirie_m = ap_venit.get("chirie_lunara_estimata_eur") or ap_venit.get("chirie_lunara_eur") or 0
-            chirie_mp_v = ap_venit.get("chirie_eur_mp_luna") or (round(chirie_m / suprafata, 1) if suprafata else 0)
+            chirie_mp_v = (
+                ap_venit.get("chirie_eur_mp_luna")
+                or ap_venit.get("chirie_mp_eur")
+                or (round(chirie_m / suprafata, 1) if suprafata else 0)
+            )
             neocupare = ap_venit.get("grad_neocupare_procent") or ap_venit.get("neocupare_procent") or 0
             opex = ap_venit.get("cheltuieli_operationale_procent") or 0
-            noi = ap_venit.get("venit_net_anual_noi_eur") or ap_venit.get("noi_eur") or 0
+            noi = (
+                ap_venit.get("venit_net_anual_noi_eur")
+                or ap_venit.get("venit_net_anual_eur")
+                or ap_venit.get("noi_eur")
+                or 0
+            )
             cap_rate = ap_venit.get("rata_capitalizare_procent") or ap_venit.get("cap_rate") or 0
             rand_brut = ap_venit.get("randament_brut_procent") or 0
             val_venit = ap_venit.get("valoare_prin_venit_eur") or ap_venit.get("valoare_rezultata_eur") or 0
             com_venit = ap_venit.get("comentariu") or "Valoarea prin capitalizare reflectă potențialul de randament investițional."
+
+            # NOI is the one line of this table a reader recomputes by hand, so
+            # when the source did not carry it, derive it from the three rows
+            # above rather than printing "0 EUR/an" under a real rent.
+            noi_derivat = False
+            if not noi and chirie_m:
+                noi = chirie_m * 12 * (1 - neocupare / 100) * (1 - opex / 100)
+                noi_derivat = True
+            noi_txt = f"{noi:,.0f} EUR/an" if noi else "Nedeterminat"
+            noi_nota = (
+                "Chirie anuală, minus neocuparea și cheltuielile de exploatare de mai sus"
+                if noi_derivat
+                else "Venit net generat după cheltuieli"
+            )
 
             randuri_venit = [
                 ["Indicator Financiar Investițional", "Valoare Parametru", "Observații Metodologice"],
                 ["Chirie Lunară Estimată", f"{chirie_m:,.0f} EUR/lună", f"{chirie_mp_v:.1f} EUR/mp/lună conform pieței"],
                 ["Grad de Neocupare & Risc Vacanță", f"{neocupare}%", "Timp mediu de tranziție între chiriași"],
                 ["Cheltuieli Operaționale (Opex)", f"{opex}%", "Mentenanță, fond rulment, taxe locale"],
-                ["Venit Net Anual din Exploatare (NOI)", f"{noi:,.0f} EUR/an", "Venit net generat după cheltuieli"],
+                ["Venit Net Anual din Exploatare (NOI)", noi_txt, noi_nota],
                 ["Rată de Capitalizare (Cap Rate)", f"{cap_rate:.2f}%", "Rata de referință a pieței rezidențiale"],
-                ["Randament Brut Estimativ", f"{rand_brut:.2f}%", "Randament brut raportat la valoare"],
+                ["Randament Brut Estimativ", f"{rand_brut:.2f}%", "Chirie anuală brută raportată la prețul cerut"],
                 ["Valoare Rezultată prin Venit", f"{val_venit:,.0f} EUR", "Valoare obținută prin capitalizare NOI / CapRate"],
             ]
             poveste.append(_formateaza_tabel(randuri_venit, stiluri, [160, 110, 217]))
-            poveste.append(Paragraph(f"<i>{com_venit}</i>", stiluri["CorpMuted"]))
+            poveste.append(Paragraph(f"<i>{_txt(com_venit)}</i>", stiluri["CorpMuted"]))
             poveste.append(Spacer(1, 8))
 
         # 2.3 Abordarea prin Cost
@@ -701,7 +929,7 @@ def genereaza_raport_complet_pdf(
                 ["Valoare Rezultată prin Cost", f"{val_cost:,.0f} EUR", "Teren + RCN diminuat cu deprecierile totale"],
             ]
             poveste.append(_formateaza_tabel(randuri_cost, stiluri, [160, 110, 217]))
-            poveste.append(Paragraph(f"<i>{com_cost}</i>", stiluri["CorpMuted"]))
+            poveste.append(Paragraph(f"<i>{_txt(com_cost)}</i>", stiluri["CorpMuted"]))
             poveste.append(Spacer(1, 8))
 
         # 2.4 Reconcilierea Abordărilor
@@ -717,16 +945,50 @@ def genereaza_raport_complet_pdf(
             val_venit_disp = val_venit if "val_venit" in locals() and val_venit else val_piata
             val_cost_disp = val_cost if "val_cost" in locals() and val_cost else val_piata
 
+            # The column is headed "Contribuție în Valoarea Finală", so the last
+            # row has to be the sum of the three above it. It used to print the
+            # reconciled value instead, and the two differ -- 326.258 against a
+            # stated 328.000 on the demo dossier -- which reads as an
+            # arithmetic error in the one table meant to show the arithmetic.
+            contributii = [
+                val_piata * pond_comp / 100,
+                val_venit_disp * pond_venit / 100,
+                val_cost_disp * pond_cost / 100,
+            ]
+            suma_ponderata = sum(contributii)
+            pondere_totala = pond_comp + pond_venit + pond_cost
+
             randuri_rec = [
                 ["Metodă de Evaluare ANEVAR", "Pondere Alocată", "Valoare Metodă", "Contribuție în Valoarea Finală"],
-                ["Metoda Comparației Directe", f"{pond_comp}%", f"{val_piata:,.0f} EUR", f"{(val_piata * pond_comp / 100):,.0f} EUR"],
-                ["Abordarea prin Venit (Capitalizare)", f"{pond_venit}%", f"{val_venit_disp:,.0f} EUR", f"{(val_venit_disp * pond_venit / 100):,.0f} EUR"],
-                ["Abordarea prin Cost (Înlocuire Netă)", f"{pond_cost}%", f"{val_cost_disp:,.0f} EUR", f"{(val_cost_disp * pond_cost / 100):,.0f} EUR"],
-                ["Valoare Finală Reconciliată", "100%", f"{val_rec:,.0f} EUR", f"<b>{val_rec:,.0f} EUR</b>"],
+                ["Metoda Comparației Directe", f"{pond_comp}%", f"{val_piata:,.0f} EUR", f"{contributii[0]:,.0f} EUR"],
+                ["Abordarea prin Venit (Capitalizare)", f"{pond_venit}%", f"{val_venit_disp:,.0f} EUR", f"{contributii[1]:,.0f} EUR"],
+                ["Abordarea prin Cost (Înlocuire Netă)", f"{pond_cost}%", f"{val_cost_disp:,.0f} EUR", f"{contributii[2]:,.0f} EUR"],
+                [
+                    "Valoare Ponderată a Abordărilor",
+                    f"{pondere_totala:,.0f}%",
+                    "—",
+                    f"{suma_ponderata:,.0f} EUR",
+                ],
+                [
+                    "<b>Valoare Finală Reconciliată</b>",
+                    "",
+                    "",
+                    f"<b>{val_rec:,.0f} EUR</b>",
+                ],
             ]
             poveste.append(_formateaza_tabel(randuri_rec, stiluri, [150, 85, 112, 140]))
+            # A valuer is allowed to round the weighted result to a round
+            # number, but the reader should be told that is what happened
+            # rather than left to spot the gap.
+            if val_rec and abs(val_rec - suma_ponderata) >= 1:
+                poveste.append(Paragraph(
+                    f"<i>Valoarea finală este rezultatul ponderat de "
+                    f"{suma_ponderata:,.0f} {moneda}, rotunjit la {val_rec:,.0f} {moneda} "
+                    f"(diferență de {abs(val_rec - suma_ponderata):,.0f} {moneda}).</i>",
+                    stiluri["CorpMuted"],
+                ))
             if justif:
-                poveste.append(Paragraph(f"<b>Justificare Reconciliere:</b> {justif}", stiluri["CorpMuted"]))
+                poveste.append(Paragraph(f"<b>Justificare Reconciliere:</b> {_txt(justif)}", stiluri["CorpMuted"]))
             poveste.append(Spacer(1, 8))
 
         # 2.5 Analiză de Senzitivitate
@@ -741,7 +1003,7 @@ def genereaza_raport_complet_pdf(
 
         if scenarii:
             poveste.append(Paragraph("<b>Analiză de Senzitivitate la Șocuri de Piață</b>", stiluri["SectiuneH3"]))
-            randuri_senz = [["Scenariu / Factor de Stres", "Parametru Modificat", "Valoare Rezultată (€)", "Variație fața de Bază"]]
+            randuri_senz = [["Scenariu / Factor de Stres", "Parametru Modificat", "Valoare Rezultată (€)", "Variație față de Bază"]]
             for sc in scenarii:
                 if isinstance(sc, dict):
                     randuri_senz.append([
@@ -752,7 +1014,7 @@ def genereaza_raport_complet_pdf(
                     ])
             poveste.append(_formateaza_tabel(randuri_senz, stiluri, [140, 120, 110, 117]))
             if com_senz:
-                poveste.append(Paragraph(f"<i>Reziliență: {com_senz}</i>", stiluri["CorpMuted"]))
+                poveste.append(Paragraph(f"<i>Reziliență: {_txt(com_senz)}</i>", stiluri["CorpMuted"]))
             poveste.append(Spacer(1, 10))
 
     # =========================================================================
@@ -838,10 +1100,10 @@ def genereaza_raport_complet_pdf(
                 dist_m = f.get("distanta_m") or f.get("distanta_metri") or 0
                 timp_min = f.get("minute_mers") or f.get("timp_mers_pe_jos_minute") or f.get("timp_minute") or (round(dist_m / 80) if dist_m else 1)
                 rat = f.get("rating_google") or f.get("rating")
-                rat_txt = f"{rat:.1f} ★" if rat else "-"
+                rat_txt = f"{rat:.1f}/5" if rat else "-"
                 randuri_fac.append([
                     cat,
-                    nume_f[:35],
+                    nume_f,
                     f"{dist_m} m",
                     f"~{timp_min} min",
                     rat_txt,
@@ -882,29 +1144,41 @@ def genereaza_raport_complet_pdf(
         )
         poveste.append(Spacer(1, 10))
     else:
-        scor_fatada = audit_ext.get("scor_fatada") or audit_ext.get("scor_exterior") or (audit_ext.get("evaluare_globala_exterior", {}) or {}).get("scor_calitate_cladire_si_fatada") or "N/A"
-        scor_strada = audit_ext.get("scor_strada") or (audit_ext.get("evaluare_globala_exterior", {}) or {}).get("scor_ambient_strada_si_zona") or "N/A"
-        clasa_fatada = audit_ext.get("clasa_fatada") or "Finisaj Standard"
-        stare_fatada = audit_ext.get("stare_fatada") or (audit_ext.get("cladire_si_fatada", {}) or {}).get("stare_generala_fatada") or "N/A"
-        concluzie_ext = audit_ext.get("concluzie_generala_exterior") or (audit_ext.get("evaluare_globala_exterior", {}) or {}).get("concluzie_audit_exterior") or "Imobil analizat exterior."
+        glob_ext = audit_ext.get("evaluare_globala_exterior") or {}
+        scor_fatada = audit_ext.get("scor_fatada") or audit_ext.get("scor_exterior") or glob_ext.get("scor_calitate_cladire_si_fatada")
+        scor_strada = audit_ext.get("scor_strada") or glob_ext.get("scor_ambient_strada_si_zona")
+        clasa_fatada = audit_ext.get("clasa_fatada") or "Neclasificat"
+        stare_fatada = audit_ext.get("stare_fatada") or (audit_ext.get("cladire_si_fatada", {}) or {}).get("stare_generala_fatada")
+        concluzie_ext = audit_ext.get("concluzie_generala_exterior") or glob_ext.get("concluzie_audit_exterior")
 
-        text_ext = (
-            f"<b>Clasă & Stare Fațadă:</b> {clasa_fatada} (Scor {scor_fatada}/10) • "
-            f"<b>Infrastructură Stradă:</b> Scor {scor_strada}/10.<br/>"
-            f"<b>Constatare Tehnică Fațadă:</b> {stare_fatada}<br/>"
-            f"<b>Concluzie Exterior:</b> {concluzie_ext}"
-        )
+        # A missing score printed as "N/A/10", which reads like a score.
+        def _scor(valoare: Any) -> str:
+            return f"Scor {valoare}/10" if valoare is not None else "Nepunctat"
+
+        linii_ext = [
+            f"<b>Clasă & Stare Fațadă:</b> {clasa_fatada} ({_scor(scor_fatada)}) • "
+            f"<b>Infrastructură Stradă:</b> {_scor(scor_strada)}."
+        ]
+        if stare_fatada:
+            linii_ext.append(f"<b>Constatare Tehnică Fațadă:</b> {stare_fatada}")
+        if concluzie_ext:
+            linii_ext.append(f"<b>Concluzie Exterior:</b> {concluzie_ext}")
+        text_ext = "<br/>".join(linii_ext)
         poveste.append(_creeaza_card_apel(text_ext, stiluri, titlu="AUDIT VIZUAL STRADĂ & FAȚADĂ", culoare_accent=GOOGLE_BLUE))
         poveste.append(Spacer(1, 8))
 
-        # Detaliere pe componente exterioare
+        # Detaliere pe componente exterioare. Fiecare rând raportează ce s-a
+        # observat sau spune explicit că nu s-a observat nimic -- valorile
+        # implicite anterioare afirmau trotuare conforme și hidroizolație bună
+        # pentru imobile pe care nimeni nu le inspectase.
+        _NEOBSERVAT = "Neevaluat din imaginile disponibile"
         randuri_ext_comp = [
-            ["Componentă Exterioară Analizată", "Constatare Tehnică & Stare Reclamantă"],
-            ["Fațadă & Finisaje", str(audit_ext.get("stare_fatada") or "Fără degradări structurale vizibile.")],
-            ["Trotuare & Căi de Acces", str(audit_ext.get("trotuare_si_acces") or "Trotuare pietonale conforme, accesibilizate.")],
-            ["Cabluri Aeriene & Utilități", str(audit_ext.get("cabluri_aeriene") or "Cablare îngropată, iluminat public funcțional.")],
-            ["Parcare & Căi Rutiere", str(audit_ext.get("parcare_si_strazi") or "Acces auto securizat, căi carosabile asfaltate.")],
-            ["Acoperiș & Terasă", str(audit_ext.get("acoperis_terasa") or "Hidroizolație și termoizolație conforme.")],
+            ["Componentă Exterioară Analizată", "Constatare Tehnică & Stare Constatată"],
+            ["Fațadă & Finisaje", str(audit_ext.get("stare_fatada") or _NEOBSERVAT)],
+            ["Trotuare & Căi de Acces", str(audit_ext.get("trotuare_si_acces") or _NEOBSERVAT)],
+            ["Cabluri Aeriene & Utilități", str(audit_ext.get("cabluri_aeriene") or _NEOBSERVAT)],
+            ["Parcare & Căi Rutiere", str(audit_ext.get("parcare_si_strazi") or _NEOBSERVAT)],
+            ["Acoperiș & Terasă", str(audit_ext.get("acoperis_terasa") or _NEOBSERVAT)],
         ]
         poveste.append(_formateaza_tabel(randuri_ext_comp, stiluri, [150, 337]))
         poveste.append(Spacer(1, 8))
@@ -922,11 +1196,20 @@ def genereaza_raport_complet_pdf(
         for item in lista_poze[:4]:
             cale_cand = item.get("cale") or item.get("path") or item.get("url") if isinstance(item, dict) else str(item)
             cale_reala = _obtine_cale_imagine_locala(cale_cand)
-            if cale_reala and os.path.exists(cale_reala):
-                try:
-                    rand_poze_flux.append(Image(cale_reala, width=238, height=135))
-                except Exception as err:
-                    logger.debug("Nu s-a putut desena imaginea %s: %s", cale_reala, err)
+            if not (cale_reala and os.path.exists(cale_reala)):
+                continue
+            # Fitted, not forced to 238x135: a Street View capture is 4:3 and a
+            # seller's photograph is whatever they uploaded, so a fixed 16:9 box
+            # was visibly stretching both.
+            img = _imagine_incadrata(cale_reala, 231, 150)
+            if img is None:
+                continue
+            eticheta = item.get("eticheta") or item.get("descriere") if isinstance(item, dict) else None
+            if eticheta:
+                celula = [img, Spacer(1, 2), Paragraph(_txt(eticheta), stiluri["CorpMuted"])]
+            else:
+                celula = img
+            rand_poze_flux.append(celula)
 
         if rand_poze_flux:
             for i in range(0, len(rand_poze_flux), 2):
@@ -935,8 +1218,11 @@ def genereaza_raport_complet_pdf(
                 tab_img = Table([grup], colWidths=col_w)
                 tab_img.setStyle(TableStyle([
                     ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                    ("BOX", (0, 0), (-1, -1), 0.5, GOOGLE_BORDER),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.5, GOOGLE_BORDER),
                 ]))
                 poveste.append(tab_img)
             poveste.append(Spacer(1, 10))
@@ -1011,7 +1297,7 @@ def genereaza_raport_complet_pdf(
             randuri_cf = [["Categorie Finisaj", "Nivel Calitate / Clasă", "Notă", "Observații Tehnice & Materiale"]]
             for cf in cat_fin:
                 c_nume = cf.get("categorie") or cf.get("nume") or "Finisaj"
-                c_cal = cf.get("nivel_calitate") or cf.get("clasa") or "Medie"
+                c_cal = cf.get("nivel_calitate") or cf.get("calitate") or cf.get("clasa") or "-"
                 c_nota = str(cf.get("scor") or cf.get("nota") or cf.get("stare") or "Bună")
                 c_obs = cf.get("observatii") or cf.get("detalii") or "-"
                 randuri_cf.append([c_nume, c_cal, c_nota, c_obs])
@@ -1095,21 +1381,26 @@ def genereaza_raport_complet_pdf(
             brand = e.get("brand_detectat") or e.get("brand") or "-"
             model = e.get("model_sau_serie") or e.get("gama_brand") or e.get("model") or ""
             brand_full = f"{brand} ({model})" if model else brand
-            nivel = e.get("clasa_pret") or e.get("nivel_pret") or "Premium"
+            # "Premium" and "Excelentă" as defaults graded appliances nobody had
+            # looked at; an unknown grade is now shown as unknown.
+            nivel = e.get("clasa_pret") or e.get("nivel_pret") or "-"
             p_n = e.get("pret_estimat_nou_eur") or e.get("pret_nou_estimat_eur") or 0
             p_a = e.get("valoare_piata_actuala_eur") or e.get("valoare_actuala_eur") or 0
-            stare = e.get("stare") or e.get("uzura") or "Excelentă"
+            stare = e.get("stare") or e.get("uzura") or "-"
 
             randuri_cat_el.append([
                 ap,
                 cam,
-                brand_full[:25],
+                brand_full,
                 nivel,
                 f"~{p_n:,.0f} €",
                 f"~{p_a:,.0f} €",
                 stare,
             ])
-        poveste.append(_formateaza_tabel(randuri_cat_el, stiluri, [85, 65, 127, 55, 55, 55, 45]))
+        # "Stare" is a sentence, not a word: at 45 pt it wrapped one syllable
+        # per line ("im / pecabile"). The money columns are the narrow ones --
+        # they hold six characters and never wrap.
+        poveste.append(_formateaza_tabel(randuri_cat_el, stiluri, [88, 52, 105, 48, 48, 48, 98]))
         poveste.append(Spacer(1, 10))
 
     # =========================================================================
@@ -1257,7 +1548,7 @@ def genereaza_raport_complet_pdf(
     else:
         text_rec = (
             f"<b>Scor Comunitate & Reputație:</b> <b>{scor_rep}/10</b> ({calif_rep}) • "
-            f"<b>Rating Google Maps:</b> <b>{rating_g} ★</b> din <b>{tot_rec} recenzii</b> validate.<br/>"
+            f"<b>Rating Google Maps:</b> <b>{rating_g}/5</b> din <b>{tot_rec} recenzii</b> validate.<br/>"
             f"<b>Sfat & Recomandare pentru Cumpărător:</b> {sfat_c}"
         )
         poveste.append(_creeaza_card_apel(text_rec, stiluri, titlu="SENTIMENT COMUNITATE & FEEDBACK REZIDENȚI", culoare_accent=GOOGLE_BLUE))
@@ -1272,8 +1563,8 @@ def genereaza_raport_complet_pdf(
             ]]
             m_len = max(len(pf_rec), len(pr_rec))
             for i in range(m_len):
-                p1 = f"• {pf_rec[i]}" if i < len(pf_rec) else ""
-                p2 = f"• {pr_rec[i]}" if i < len(pr_rec) else ""
+                p1 = f"• {_txt(pf_rec[i])}" if i < len(pf_rec) else ""
+                p2 = f"• {_txt(pr_rec[i])}" if i < len(pr_rec) else ""
                 linii_rev.append([
                     Paragraph(p1, stiluri["TabelCelula"]),
                     Paragraph(p2, stiluri["TabelCelula"]),
@@ -1323,7 +1614,7 @@ def genereaza_raport_complet_pdf(
     _ND = "Nedeterminat"
     randuri_piata = [
         ["Indicator de Micro-Piață", "Valoare Măsurată", "Impact Asupra Negocierii"],
-        ["Zonă / Micro-Piață", str(zona_p)[:35], "Segment rezidențial de referință"],
+        ["Zonă / Micro-Piață", str(zona_p), "Segment rezidențial de referință"],
         [
             "Preț Mediu Unitar Zonă",
             f"{p_med:,.0f} EUR/mp" if p_med else _ND,
@@ -1352,7 +1643,7 @@ def genereaza_raport_complet_pdf(
     ]
     poveste.append(_formateaza_tabel(randuri_piata, stiluri, [150, 110, 227]))
     if com_piata:
-        poveste.append(Paragraph(f"<i>Analiză micro-zonă: {com_piata}</i>", stiluri["CorpMuted"]))
+        poveste.append(Paragraph(f"<i>Analiză micro-zonă: {_txt(com_piata)}</i>", stiluri["CorpMuted"]))
     poveste.append(Spacer(1, 8))
 
     hbu = date_proprietate.get("cea_mai_buna_utilizare") or "Utilizare rezidențială exclusivă conform destinației autorizate (Highest & Best Use - SEV 100)."
@@ -1366,6 +1657,35 @@ def genereaza_raport_complet_pdf(
     # "indisponibil" -- maintenance used to be the surface times a constant and
     # was printed as if it had been read off a bill.
     randuri_costuri = [["Post de Cheltuială", "Cost Estimat", "Temei / Detalii"]]
+
+    # Two shapes reach this table. `posturi` is the itemised one the costs
+    # module emits; the audit payload carries a flat dict of named amounts
+    # instead, and that one used to fall straight through -- the section
+    # printed its heading and a transaction total, with every holding cost it
+    # promised silently missing.
+    _POSTURI_PLATE = [
+        ("intretinere_lunara_eur", "Întreținere & Administrare", 12, "Cotă lunară de întreținere, anualizată"),
+        ("fond_reparatii_lunar_eur", "Fond de Reparații", 12, "Cotă lunară la fondul de reparații, anualizată"),
+        ("impozit_anual_eur", "Impozit pe Clădire & Teren", 1, "Impozit local anual (Codul Fiscal, Titlul IX)"),
+        ("asigurare_anuala_eur", "Asigurare Obligatorie & Facultativă", 1, "PAD obligatoriu (Legea 260/2008) plus poliță facultativă"),
+    ]
+    if not cost_det.get("posturi"):
+        for cheie, eticheta, multiplicator, temei in _POSTURI_PLATE:
+            suma = cost_det.get(cheie)
+            if not suma:
+                continue
+            anual = suma * multiplicator
+            detaliu = (
+                f"{temei} ({suma:,.0f} EUR/lună)" if multiplicator == 12 else temei
+            )
+            randuri_costuri.append([eticheta, f"~{anual:,.0f} EUR/an", detaliu])
+        if total_det := cost_det.get("total_anual_eur"):
+            randuri_costuri.append([
+                "TOTAL COSTURI ANUALE DE DEȚINERE",
+                f"<b>~{total_det:,.0f} EUR/an</b>",
+                "Sumă recurentă, cât timp proprietatea este deținută",
+            ])
+
     for post in cost_det.get("posturi") or []:
         minim, maxim = post.get("minim_eur"), post.get("maxim_eur")
         if minim is None:
@@ -1377,7 +1697,24 @@ def genereaza_raport_complet_pdf(
         else:
             valoare = f"{minim:,.0f} – {maxim:,.0f} EUR/an"
             detaliu = post.get("temei") or "—"
-        randuri_costuri.append([str(post.get("componenta") or "—"), valoare, str(detaliu)[:150]])
+        randuri_costuri.append([str(post.get("componenta") or "—"), valoare, str(detaliu)])
+
+    # The transaction side arrives flat too, as percentages of the price.
+    _POSTURI_TRANZ = [
+        ("onorariu_notarial_procent", "Onorariu Notarial", "Procent din prețul de achiziție, conform grilei notariale"),
+        ("taxa_intabulare_procent", "Taxă de Intabulare (ANCPI)", "Tarif ANCPI pentru înscrierea în cartea funciară"),
+        ("comision_agentie_procent", "Comision Agenție", "Procent din prețul de achiziție, dacă tranzacția e intermediată"),
+    ]
+    if not cost_tranz.get("posturi") and pret:
+        for cheie, eticheta, temei in _POSTURI_TRANZ:
+            procent = cost_tranz.get(cheie)
+            if not procent:
+                continue
+            randuri_costuri.append([
+                eticheta,
+                f"~{pret * procent / 100:,.0f} EUR",
+                f"{temei} ({procent}%)",
+            ])
 
     for post in (cost_tranz.get("posturi") or []):
         minim, maxim = post.get("minim_eur"), post.get("maxim_eur")
@@ -1387,7 +1724,7 @@ def genereaza_raport_complet_pdf(
             f"~{minim:,.0f} EUR" if minim == maxim else f"{minim:,.0f} – {maxim:,.0f} EUR"
         )
         randuri_costuri.append(
-            [str(post.get("componenta") or "—"), valoare, str(post.get("temei") or "—")[:150]]
+            [str(post.get("componenta") or "—"), valoare, str(post.get("temei") or "—")]
         )
 
     total_tranz = cost_tranz.get("total_estimat_eur")
@@ -1406,9 +1743,9 @@ def genereaza_raport_complet_pdf(
 
     poveste.append(_formateaza_tabel(randuri_costuri, stiluri, [180, 110, 197]))
     if nota_tranz := cost_tranz.get("nota"):
-        poveste.append(Paragraph(f"<i>{nota_tranz}</i>", stiluri["CorpMuted"]))
+        poveste.append(Paragraph(f"<i>{_txt(nota_tranz)}</i>", stiluri["CorpMuted"]))
     if motiv_det := cost_det.get("motiv"):
-        poveste.append(Paragraph(f"<i>{motiv_det}</i>", stiluri["CorpMuted"]))
+        poveste.append(Paragraph(f"<i>{_txt(motiv_det)}</i>", stiluri["CorpMuted"]))
     poveste.append(Spacer(1, 8))
 
     # Bugetul consolidat: prețul nu este bugetul.
@@ -1426,7 +1763,7 @@ def genereaza_raport_complet_pdf(
                 f"~{minim:,.0f} EUR" if minim == maxim else f"{minim:,.0f} – {maxim:,.0f} EUR"
             )
             randuri_buget.append(
-                [str(post.get("componenta")), valoare, str(post.get("temei") or "—")[:130]]
+                [str(post.get("componenta")), valoare, str(post.get("temei") or "—")]
             )
         randuri_buget.append([
             "COST TOTAL CONSOLIDAT",
@@ -1602,7 +1939,13 @@ def genereaza_raport_complet_pdf(
         metodologie.get("amploare")
         or "Fără inspecție fizică de către un membru autorizat. Analiză bazată exclusiv pe date publice și imagini."
     )
-    disclaimer_tot = f"<b>NEÎNDEPLINIT / DISCLAIMER EVALUATOR:</b> {evaluator_text}<br/><b>AMPLOAREA INVESTIGAȚIEI:</b> {amploare_text}"
+    # The label used to be "NEÎNDEPLINIT / DISCLAIMER EVALUATOR", while the
+    # value it introduces already opens with "NEÎNDEPLINIT — ...". The row read
+    # as a stutter; the label now just names the field.
+    disclaimer_tot = (
+        f"<b>CALITATEA EVALUATORULUI:</b> {evaluator_text}<br/>"
+        f"<b>AMPLOAREA INVESTIGAȚIEI:</b> {amploare_text}"
+    )
     poveste.append(_creeaza_card_apel(disclaimer_tot, stiluri, titlu="CLAUZĂ DE EXONERARE & NECONFORMITATE DECLARATĂ", culoare_accent=GOOGLE_AMBER, culoare_fundal=TINT_AMBER))
     poveste.append(Spacer(1, 8))
 
@@ -1705,7 +2048,7 @@ def genereaza_raport_complet_pdf(
 
         concesii_list = scara.get("concesii_descrescatoare_eur") or []
         if concesii_list:
-            pasi = " → ".join(f"{c:,.0f}" for c in concesii_list)
+            pasi = _txt(" → ".join(f"{c:,.0f}" for c in concesii_list))
             poveste.append(Paragraph(
                 f"<i>Model de concesii descrescătoare, de la oferta inițială: {pasi} "
                 f"{moneda}. Pași egali semnalează vânzătorului o marjă neepuizată.</i>",
@@ -1772,10 +2115,11 @@ def genereaza_raport_complet_pdf(
             poveste.append(_formateaza_tabel(randuri_reguli, stiluri, [30, 457]))
             poveste.append(Spacer(1, 8))
 
-        poveste.append(Paragraph(
-            f"<i>{strategie.get('sursa', '')}</i>", stiluri["CorpMuted"]
-        ))
-        poveste.append(Spacer(1, 8))
+        if sursa_strategie := strategie.get("sursa"):
+            poveste.append(Paragraph(
+                f"<i>{_txt(sursa_strategie)}</i>", stiluri["CorpMuted"]
+            ))
+            poveste.append(Spacer(1, 8))
 
     if not evaluare_disponibila or val_piata is None:
         concluzie_text = (
@@ -1816,9 +2160,12 @@ def genereaza_raport_complet_pdf(
         # `ajustare_pct` is None whenever the valuation reported a margin in euros
         # but no percentage, and formatting None crashed the whole PDF build.
         if marja_eur > 0:
-            if ajustare_pct is not None:
+            if ecart_pct is not None:
+                # The argument is how far the asking price sits above the
+                # estimate, which is `ecart_pct`. Printing `ajustare_pct` here
+                # produced "cu -4,9% peste nivelul pieței" -- a negative excess.
                 puncte_argumente.append(
-                    f"Preț cerut cu {ajustare_pct:+.1f}% peste nivelul mediu al pieței"
+                    f"Preț cerut cu {abs(ecart_pct):.1f}% peste valoarea estimată de piață"
                 )
             else:
                 puncte_argumente.append(

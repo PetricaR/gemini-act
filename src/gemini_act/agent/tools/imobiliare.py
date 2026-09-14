@@ -1302,18 +1302,33 @@ async def cauta_imoradar_agregat(
         camere: Exact number of rooms.
         suprafata_min: Minimum usable surface in square metres.
         zile_pe_piata_max: Only listings on the market at most this many days.
-        sort: "price_per_sqm", "price", "price_desc", "surface", "newest" or
-            "year_built".
+        sort: "metro" (nearest a metro station first — this source publishes
+            metro distance, so it works for Bucharest), "price_per_sqm",
+            "price", "price_desc", "surface", "newest", "year_built", or
+            "relevance" to keep the portal's own ordering.
         limit: Maximum listings to return.
 
     Returns:
-        A dict with "status", and on success "listings", "oferta_totala" — how
-        many distinct properties are on the market there — "oferta_proprietari"
-        (how many of those are from owners directly), "portaluri" (the source
-        breakdown) and "excluse_neconforme", listings dropped for carrying a
-        price no sale could be at. Report "days_on_market" as time on the
-        market and not as freshness of the ad: it is the longer of the ad's age
-        on its own portal and its age in this index.
+        A dict with "status", and on success:
+
+        * "listings", and "zona_rezolvata" — which published location the name
+          resolved to, with "alternative" paths when it was ambiguous. Check it
+          before reporting: a bare name like "Central" exists in dozens of
+          towns, and this says which one was actually searched.
+        * "oferta_totala" — how many distinct properties are on the market
+          there (the portal de-duplicates across its sources, so this is a
+          property count, not an ad count) — and "oferta_proprietari", how many
+          of those are advertised by owners directly.
+        * "portaluri" — which portal the listings came from. This counts only
+          the pool that was read, not "oferta_totala"; never present it as the
+          split of the whole market.
+        * "excluse_neconforme", listings dropped for carrying a price no sale
+          could be at, and "pagini_ramase": true means there were more results
+          than were read, so "listings" is not the whole of what matches.
+
+        Report "days_on_market" as time on the market and not as freshness of
+        the ad: it is the longer of the ad's age on its own portal and its age
+        in this index.
     """
     settings = get_settings()
     if not settings.imobiliare_enabled:
@@ -1376,10 +1391,15 @@ async def istoric_pret_imoradar_anunt(id_anunt: str) -> dict[str, Any]:
             result, or a listing url.
 
     Returns:
-        A dict with "status", and on success "observat" and — when that is
-        true — the first and last sighting, the opening and current asking
-        price, "schimbare_pct", "reduceri" (how many cuts), and the series
-        itself; on error an "error_message".
+        A dict with "status" and "observat". When "observat" is true:
+        "prima_aparitie" and "ultima_aparitie" (first and last sighting),
+        "zile_de_la_prima_aparitie", "pret_initial" and "pret_curent",
+        "pret_minim" and "pret_maxim" over the whole period, "schimbare_pct"
+        between the opening and current asking price, "reduceri" (how many
+        cuts), "observatii" (how many sightings), "puncte_ambigue", and
+        "serie", the observations themselves. When it is false, a "nota"
+        saying why — quote that rather than inferring a stable price. On error
+        an "error_message".
     """
     settings = get_settings()
     if not settings.imobiliare_enabled:
@@ -1396,6 +1416,97 @@ async def istoric_pret_imoradar_anunt(id_anunt: str) -> dict[str, Any]:
         return await asyncio.to_thread(work)
     except Exception as exc:  # noqa: BLE001
         return _failure("imoradar24 price history", exc)
+
+
+# -- Documente de referință din Google Drive -------------------------------
+#
+# Un folder Drive partajat cu identitatea acestui serviciu (pe Cloud Run, contul
+# de serviciu din `deploy/setup_gcp.sh`), citit read-only. Este locul unde ajung
+# documentele care informează o evaluare fără a fi deduse din anunț: cataloage
+# de costuri, ghiduri ANEVAR, fișe de dezvoltator. Vezi
+# `imobiliare_mcp/drive_docs.py` pentru de ce un folder nepartajat raportează
+# 404 și nu 403.
+
+
+async def documente_referinta_drive(reincarca: bool = False) -> dict[str, Any]:
+    """Listează documentele de referință disponibile în folderul Google Drive al proiectului.
+
+    Folosește această unealtă întâi, ca să vezi ce documente există, apoi
+    `citeste_document_referinta` pentru unul anume sau
+    `cauta_in_documente_referinta` ca să găsești un pasaj fără a citi tot.
+
+    Args:
+        reincarca: Ignoră listarea din cache și interoghează Drive din nou.
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import documente_drive as server_tool
+
+        return server_tool(reincarca=reincarca)
+
+    try:
+        return await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Drive reference documents listing", exc)
+
+
+async def citeste_document_referinta(
+    identificator: str,
+    de_la: int = 0,
+    max_caractere: int = 20000,
+) -> dict[str, Any]:
+    """Citește textul unui document de referință din folderul Google Drive.
+
+    Merge pe PDF, Google Docs/Sheets/Slides, .docx și text simplu. Dacă
+    răspunsul are `trunchiat: true`, reia apelul cu `de_la` egal cu
+    `urmatorul_offset` pentru bucata următoare.
+
+    Args:
+        identificator: Numele documentului din listare (sau o parte din el), calea sau id-ul Drive.
+        de_la: Caracterul de la care se continuă citirea, pentru documente lungi.
+        max_caractere: Cât text să se întoarcă într-un singur apel.
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import citeste_document_drive as server_tool
+
+        return server_tool(identificator=identificator, de_la=de_la, max_caractere=max_caractere)
+
+    try:
+        return await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Drive reference document read", exc)
+
+
+async def cauta_in_documente_referinta(termen: str) -> dict[str, Any]:
+    """Caută un termen în toate documentele de referință din Google Drive.
+
+    Întoarce fragmentele din jurul fiecărei apariții, ca să poți răspunde fără
+    să încarci documentele întregi. Documentele care nu au putut fi citite
+    (formate nesuportate, PDF-uri scanate) sunt raportate explicit.
+
+    Args:
+        termen: Textul căutat, literal.
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import cauta_in_documente_drive as server_tool
+
+        return server_tool(termen=termen)
+
+    try:
+        return await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Drive reference documents search", exc)
 
 
 IMOBILIARE_TOOLS = [
@@ -1422,4 +1533,7 @@ IMOBILIARE_TOOLS = [
     recenzii_reputatie_google_maps,
     verifica_risc_seismic,
     genereaza_raport_complet_pdf,
+    documente_referinta_drive,
+    citeste_document_referinta,
+    cauta_in_documente_referinta,
 ]

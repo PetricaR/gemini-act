@@ -330,3 +330,176 @@ def test_genereaza_raport_complet_pdf_minimal_toate_cele_12_capitole(tmp_path: P
         kw = ch.split(".")[1].strip()
         assert (f"({num}." in text_pdf) or (f"{num}. " in text_pdf and kw in text_pdf), f"Capitolul {ch} lipsește din PDF-ul minimal!"
 
+
+
+# ---------------------------------------------------------------------------
+# Typography, images and report arithmetic
+# ---------------------------------------------------------------------------
+
+
+def test_fontul_acopera_alfabetul_romanesc() -> None:
+    """ă, ș and ț are outside Latin-1, so the standard PDF fonts cannot draw them.
+
+    This is the regression guard for the black boxes that used to fill every
+    heading and table cell of the report.
+    """
+    from reportlab.pdfbase import pdfmetrics
+
+    from gemini_act.imobiliare_mcp import generator_pdf
+
+    assert generator_pdf.FONT_REGULAR != "Helvetica", "fontul Unicode nu a fost înregistrat"
+    cmap = pdfmetrics.getFont(generator_pdf.FONT_REGULAR).face.charToGlyph
+    lipsa = [ch for ch in "ăâîșțĂÂÎȘȚ€" if ord(ch) not in cmap]
+    assert not lipsa, f"fontul nu acoperă {lipsa}"
+
+
+def test_txt_inlocuieste_glifele_nedesenabile() -> None:
+    """Anything the font cannot draw is substituted or dropped, never boxed."""
+    from reportlab.pdfbase import pdfmetrics
+
+    from gemini_act.imobiliare_mcp.generator_pdf import FONT_REGULAR, _txt
+
+    cmap = pdfmetrics.getFont(FONT_REGULAR).face.charToGlyph
+    iesire = _txt("Rating 4.6 ★ • preț → 209.000 € ⚠️ 🏠 ş/ţ")
+    assert all(ord(ch) in cmap for ch in iesire), iesire
+    # Cedilla forms normalise to the comma-below letters Romanian actually uses.
+    assert "ș" in iesire and "ț" in iesire
+    assert "€" in iesire
+
+
+def test_textul_dosarului_este_integral_desenabil() -> None:
+    """Every character the demo dossier carries must survive `_txt` drawable.
+
+    Walks the real payload rather than a sample, so a new field carrying an
+    emoji or a cedilla is caught here instead of as a black box in the PDF.
+    """
+    from reportlab.pdfbase import pdfmetrics
+
+    from gemini_act.api.demo_data import DEMO_AUDIT_DATA
+    from gemini_act.imobiliare_mcp.generator_pdf import FONT_REGULAR, _txt
+
+    cmap = pdfmetrics.getFont(FONT_REGULAR).face.charToGlyph
+
+    def siruri(valoare):
+        if isinstance(valoare, str):
+            yield valoare
+        elif isinstance(valoare, dict):
+            for cheie, sub in valoare.items():
+                yield cheie
+                yield from siruri(sub)
+        elif isinstance(valoare, (list, tuple)):
+            for sub in valoare:
+                yield from siruri(sub)
+
+    for original in siruri(DEMO_AUDIT_DATA):
+        curatat = _txt(original)
+        nedesenabile = [ch for ch in curatat if ord(ch) not in cmap and ch not in "\n\r\t"]
+        assert not nedesenabile, f"{original!r} păstrează {nedesenabile}"
+
+
+def test_imaginea_pastreaza_proportiile(tmp_path: Path) -> None:
+    """A photo is fitted inside its box, never stretched to fill it."""
+    from PIL import Image as PILImage
+
+    from gemini_act.imobiliare_mcp.generator_pdf import _imagine_incadrata
+
+    sursa = tmp_path / "lata.png"
+    PILImage.new("RGB", (400, 100), "white").save(sursa)  # 4:1
+
+    img = _imagine_incadrata(str(sursa), 200, 200)
+    assert img is not None
+    assert img.drawWidth == 200, "lățimea trebuie să atingă limita"
+    assert abs(img.drawHeight - 50) < 0.01, "înălțimea trebuie să urmeze proporția 4:1"
+
+
+def test_coloanele_fara_valori_sunt_eliminate() -> None:
+    """A column whose every cell is a dash is dropped and its width reallocated."""
+    from gemini_act.imobiliare_mcp.generator_pdf import _elimina_coloane_goale
+
+    randuri = [
+        ["Anunț", "Dată", "Preț"],
+        ["Comp 1", "-", "325.000"],
+        ["Comp 2", "-", "310.000"],
+    ]
+    noi_randuri, noi_latimi = _elimina_coloane_goale(randuri, [100, 50, 100])
+    assert noi_randuri[0] == ["Anunț", "Preț"]
+    assert sum(noi_latimi) == 250, "lățimea recuperată trebuie redistribuită"
+
+    # A column with at least one real value stays.
+    randuri[1][1] = "aprilie 2026"
+    pastrate, _ = _elimina_coloane_goale(randuri, [100, 50, 100])
+    assert pastrate[0] == ["Anunț", "Dată", "Preț"]
+
+
+def test_noi_este_derivat_cand_lipseste_din_date(tmp_path: Path) -> None:
+    """NOI used to print as 0 EUR/an under a real rent because of a key mismatch."""
+    dest = str(tmp_path / "venit.pdf")
+    date = {
+        "id": "noi-test",
+        "titlu": "Apartament Test",
+        "pret_total": 300000,
+        "suprafata_utila": 100,
+        "evaluare_anevar": {
+            "valoare_estimata_piata": 290000,
+            "comparabile_utilizate": [{"id": "c1", "pret": 1, "suprafata": 1}],
+            "abordare_venit": {
+                "chirie_lunara_estimata_eur": 1000,
+                "grad_neocupare_procent": 0.0,
+                "cheltuieli_operationale_procent": 0.0,
+                "venit_net_anual_eur": 12000,
+            },
+        },
+    }
+    text = _extrage_text_pdf_streams(genereaza_raport_complet_pdf(date, cale_iesire=dest))
+    assert "12,000 EUR/an" in text
+    assert "(0 EUR/an)" not in text and " 0 EUR/an" not in text
+
+
+def test_ecartul_fata_de_piata_are_semnul_corect(tmp_path: Path) -> None:
+    """An asking price above the estimate is reported as above it.
+
+    The recommended correction (negative) used to be printed under the label of
+    the excess, giving "cu -4,9% peste nivelul pieței".
+    """
+    dest = str(tmp_path / "ecart.pdf")
+    date = {
+        "id": "ecart-test",
+        "titlu": "Apartament Test",
+        "pret_total": 345000,
+        "suprafata_utila": 100,
+        "scor_general": 8.0,
+        "evaluare_anevar": {
+            "valoare_estimata_piata": 328000,
+            "ajustare_recomandata_procent": -4.9,
+            "marja_negociere_eur": 17000,
+            "comparabile_utilizate": [{"id": "c1", "pret": 1, "suprafata": 1}],
+        },
+    }
+    text = _extrage_text_pdf_streams(genereaza_raport_complet_pdf(date, cale_iesire=dest))
+    assert "5.2% peste valoarea estimat" in text
+    assert "-4.9% peste" not in text
+
+
+def test_reconcilierea_afiseaza_suma_ponderata(tmp_path: Path) -> None:
+    """The contributions column must add up to the row that totals it."""
+    dest = str(tmp_path / "reconciliere.pdf")
+    date = {
+        "id": "rec-test",
+        "titlu": "Apartament Test",
+        "pret_total": 345000,
+        "suprafata_utila": 100,
+        "evaluare_anevar": {
+            "valoare_estimata_piata": 328000,
+            "comparabile_utilizate": [{"id": "c1", "pret": 1, "suprafata": 1}],
+            "abordare_venit": {"valoare_prin_venit_eur": 319500},
+            "abordare_cost": {"valoare_prin_cost_eur": 335660},
+            "reconciliere": {
+                "pondere_comparatie_procent": 70,
+                "pondere_venit_procent": 25,
+                "pondere_cost_procent": 5,
+            },
+        },
+    }
+    text = _extrage_text_pdf_streams(genereaza_raport_complet_pdf(date, cale_iesire=dest))
+    # 328.000*0,70 + 319.500*0,25 + 335.660*0,05 = 326.258
+    assert "326,258" in text, "suma ponderată a abordărilor lipsește"
