@@ -52,6 +52,7 @@ import logging
 import os
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -468,8 +469,41 @@ def listeaza(folder: str | None = None, reincarca: bool = False) -> list[Documen
 # -- Resolving a document by whatever the caller typed ----------------------
 
 
+_COMMA_BELOW = {"ș": "s", "ş": "s", "ț": "t", "ţ": "t"}
+
+
+def fara_diacritice(text: str) -> str:
+    """Lowercase and fold diacritics, one character at a time so length is kept.
+
+    Length matters: `cauta` finds offsets in the folded text and slices the
+    *original* with them, so a fold that changed length would misplace every
+    snippet after the first diacritic. Folding per character and refusing any
+    mapping that is not 1:1 keeps the two strings index-for-index aligned.
+
+    Romanian is written both ways in practice — someone asking about a "carte
+    funciară" types "carte funciara" — and the scanned documents themselves come
+    back from OCR with the diacritics intact, so without this the two never met.
+    """
+    iesire: list[str] = []
+    for ch in text:
+        redus = ch.lower()
+        if len(redus) != 1:  # a few characters lowercase to two; keep the original
+            redus = ch
+        if (special := _COMMA_BELOW.get(redus)) is not None:
+            # Pre-composed ș/ț with comma below, which NFKD does not decompose
+            # on every platform.
+            redus = special
+        else:
+            descompus = unicodedata.normalize("NFKD", redus)
+            baza = "".join(c for c in descompus if not unicodedata.combining(c))
+            if len(baza) == 1:
+                redus = baza
+        iesire.append(redus)
+    return "".join(iesire)
+
+
 def _normalizeaza(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+    return re.sub(r"[^a-z0-9]+", " ", fara_diacritice(text)).strip()
 
 
 def gaseste(identificator: str, folder: str | None = None) -> Document:
@@ -869,7 +903,7 @@ def cauta(termen: str, folder: str | None = None, context: int = 320) -> list[di
     reported rather than skipped silently — a corpus that is quietly half
     searched is worse than one that says which half.
     """
-    tinta = termen.strip().lower()
+    tinta = fara_diacritice(termen.strip())
     if not tinta:
         raise DriveIndisponibil("Termenul de căutare este gol.")
     rezultate: list[dict[str, Any]] = []
@@ -883,7 +917,7 @@ def cauta(termen: str, folder: str | None = None, context: int = 320) -> list[di
         except DriveIndisponibil as exc:
             necitite.append({"document": doc.cale, "motiv": str(exc)})
             continue
-        jos = text.lower()
+        jos = fara_diacritice(text)
         pozitii: list[int] = []
         start = jos.find(tinta)
         while start != -1 and len(pozitii) < 5:

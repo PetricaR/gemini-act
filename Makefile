@@ -40,5 +40,8 @@ setup:  ## One-time Google Cloud setup
 deploy:  ## Build and deploy to Cloud Run
 	./deploy/deploy.sh
 
+deploy-imobiliare:  ## Deploy the valuation service (React report API + MCP endpoint)
+	./deploy/deploy_imobiliare.sh
+
 deploy-adk-ui:  ## Deploy the ADK dev web UI to Cloud Run (IAP-locked)
 	./deploy/adk_ui/deploy_cloud_run.sh

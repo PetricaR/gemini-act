@@ -40,6 +40,7 @@ dependencies = [
 [project.scripts]
 gemini-act = "gemini_act.chat.app:main"
 imobiliare-mcp = "imobiliare.mcp.server:main"
+imobiliare-http = "imobiliare.app:main"
 
 [dependency-groups]
 dev = [
