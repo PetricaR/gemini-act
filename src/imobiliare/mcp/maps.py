@@ -38,7 +38,7 @@ from typing import Any
 
 import httpx
 
-from gemini_act.config import get_settings
+from imobiliare.config import get_settings
 
 logger = logging.getLogger(__name__)
 

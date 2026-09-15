@@ -36,7 +36,6 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src/ ./src/
-COPY agents/ ./agents/
 RUN uv sync --frozen --no-dev
 
 # Copy compiled React UI from frontend-build stage

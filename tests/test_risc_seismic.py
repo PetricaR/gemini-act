@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from gemini_act.imobiliare_mcp import risc_seismic as rs
+from imobiliare.mcp import risc_seismic as rs
 
 
 def rand(adresa, nr, sector="Sector 1", incadrare="1.Clasa de risc seismic RsI.", **kw):

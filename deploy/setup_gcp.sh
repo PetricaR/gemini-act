@@ -82,7 +82,7 @@ done
 # Self-impersonation, so the runtime account can mint itself a token carrying a
 # Workspace scope. The metadata server only ever issues `cloud-platform`, which
 # does not cover Drive, and a Cloud Run service's scopes cannot be changed — so
-# reading the reference documents folder (`imobiliare_mcp/drive_docs.py`) goes
+# reading the reference documents folder (`imobiliare/mcp/drive_docs.py`) goes
 # through the IAM Credentials API instead, and that needs the account to be a
 # token creator on itself. Without this the deployed service fails at Drive with
 # 403 insufficientPermissions while a developer machine works fine.

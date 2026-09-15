@@ -16,8 +16,8 @@ from typing import Any
 from google import genai
 from google.genai import types
 
-from gemini_act.config import get_settings
-from gemini_act.imobiliare_mcp import maps, paths
+from imobiliare.config import get_settings
+from imobiliare.mcp import maps, paths
 
 logger = logging.getLogger(__name__)
 

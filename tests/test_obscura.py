@@ -6,13 +6,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gemini_act.imobiliare_mcp.obscura import (
+from imobiliare.mcp.obscura import (
     ObscuraBrowser,
     find_obscura_bin,
     parse_query_intent,
     search_imobiliare_obscura,
 )
-from gemini_act.imobiliare_mcp.server import Filters, cauta, cauta_obscura
+from imobiliare.mcp.server import Filters, cauta, cauta_obscura
 
 
 def test_find_obscura_bin():
@@ -91,9 +91,9 @@ def test_search_imobiliare_obscura_structure():
         }
     ]
 
-    with patch("gemini_act.imobiliare_mcp.comps.offers", return_value=mock_offers):
+    with patch("imobiliare.mcp.comps.offers", return_value=mock_offers):
         with patch(
-            "gemini_act.imobiliare_mcp.client.ImobiliareClient.hydrate", return_value=mock_hydrated
+            "imobiliare.mcp.client.ImobiliareClient.hydrate", return_value=mock_hydrated
         ):
             res = search_imobiliare_obscura("apartament 2 camere Titan", limit=5)
 
@@ -125,9 +125,9 @@ def test_cauta_obscura_mcp_tool():
         }
     ]
 
-    with patch("gemini_act.imobiliare_mcp.comps.offers", return_value=mock_offers):
+    with patch("imobiliare.mcp.comps.offers", return_value=mock_offers):
         with patch(
-            "gemini_act.imobiliare_mcp.client.ImobiliareClient.hydrate", return_value=mock_hydrated
+            "imobiliare.mcp.client.ImobiliareClient.hydrate", return_value=mock_hydrated
         ):
             res = cauta_obscura("apartament Aviatiei 2 camere", filtre=Filters(camere=2))
             assert res["engine"] == "obscura"
@@ -156,15 +156,15 @@ def test_cauta_fallback_on_session_error():
         }
     ]
 
-    from gemini_act.imobiliare_mcp.client import SessionError
+    from imobiliare.mcp.client import SessionError
 
     with patch(
-        "gemini_act.imobiliare_mcp.client.ImobiliareClient.search",
+        "imobiliare.mcp.client.ImobiliareClient.search",
         side_effect=SessionError("Session expired"),
     ):
-        with patch("gemini_act.imobiliare_mcp.comps.offers", return_value=mock_offers):
+        with patch("imobiliare.mcp.comps.offers", return_value=mock_offers):
             with patch(
-                "gemini_act.imobiliare_mcp.client.ImobiliareClient.hydrate",
+                "imobiliare.mcp.client.ImobiliareClient.hydrate",
                 return_value=mock_hydrated,
             ):
                 res = cauta("apartament 2 camere Floreasca")
@@ -177,7 +177,7 @@ def test_cauta_fallback_on_session_error():
 @pytest.mark.asyncio
 async def test_agent_tool_cauta_imobiliare_obscura():
     """Verify the agent tool cauta_imobiliare_obscura runs successfully."""
-    from gemini_act.agent.tools.imobiliare import cauta_imobiliare_obscura
+    from imobiliare.agent_tools.imobiliare import cauta_imobiliare_obscura
 
     mock_offers = [
         MagicMock(
@@ -198,9 +198,9 @@ async def test_agent_tool_cauta_imobiliare_obscura():
         }
     ]
 
-    with patch("gemini_act.imobiliare_mcp.comps.offers", return_value=mock_offers):
+    with patch("imobiliare.mcp.comps.offers", return_value=mock_offers):
         with patch(
-            "gemini_act.imobiliare_mcp.client.ImobiliareClient.hydrate", return_value=mock_hydrated
+            "imobiliare.mcp.client.ImobiliareClient.hydrate", return_value=mock_hydrated
         ):
             res = await cauta_imobiliare_obscura(query="apartament 2 camere Dristor", camere=2)
             assert res["status"] == "success"

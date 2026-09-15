@@ -9,7 +9,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from gemini_act.imobiliare_mcp.client import ImobiliareClient, SessionError, _as_list
+from imobiliare.mcp.client import ImobiliareClient, SessionError, _as_list
 
 
 @pytest.fixture

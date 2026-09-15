@@ -75,8 +75,13 @@ Three non-obvious things worth knowing before changing this:
 | `src/gemini_act/mcp/` | Parsing/storage of user-connected MCP servers |
 | `src/gemini_act/oauth/` | Consent flow and per-user token store |
 | `src/gemini_act/runner.py` | ADK `Runner` wiring: one agent turn, Chat text in → reply text out |
-| `agents/chat_agent/` | `adk web` entry point (anonymous mode, used by `make dev`) |
-| `agents/live_agent/` | Same agent on a Live model, for voice (`make voice`) |
+| `src/imobiliare/mcp/` | Property valuation: the standalone MCP server, its report/PDF renderers, vision passes |
+| `src/imobiliare/agent_tools/` | The ADK-facing surface: `IMOBILIARE_TOOLS` (27) and `MAPS_TOOLS` (6) |
+| `src/imobiliare/artifacts.py` | Token-keyed byte store: valuation reports staged here, sent by `chat/reply_attachment.py` |
+| `src/imobiliare/api/` | FastAPI router over that valuation, mounted by `chat/app.py` |
+| `src/imobiliare/config.py` | That package's own settings — it must not import `gemini_act` |
+| `src/adk_apps/chat_agent/` | `adk web` entry point (anonymous mode, used by `make dev`) |
+| `src/adk_apps/live_agent/` | Same agent on a Live model, for voice (`make voice`) |
 
 ## Adding tools
 
@@ -146,7 +151,7 @@ keeps it in the *returned* string for `chat/events.py` to parse and act on. Stre
 by `chat_stream_interval_seconds` to stay inside Chat's per-minute write quota — not just for
 smoothness.
 
-## Voice (`agents/live_agent/`, `Settings.live_*`)
+## Voice (`src/adk_apps/live_agent/`, `Settings.live_*`)
 
 Speaking to the agent is a different wire protocol, not a setting: ADK's live mode holds one
 bidirectional audio session open (`Runner.run_live`) and only Gemini's **Live** model family can

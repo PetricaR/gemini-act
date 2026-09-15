@@ -6,8 +6,8 @@ import time
 
 import pytest
 
-from gemini_act.chat import artifacts
 from gemini_act.chat.reply_attachment import parse_reply_attachment
+from imobiliare import artifacts
 
 
 @pytest.fixture(autouse=True)

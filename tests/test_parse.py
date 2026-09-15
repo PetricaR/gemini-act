@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from gemini_act.imobiliare_mcp.parse import filter_and_rank, normalise
+from imobiliare.mcp.parse import filter_and_rank, normalise
 
 
 def listing(**kw):

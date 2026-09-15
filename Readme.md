@@ -48,8 +48,8 @@ their own MCP servers at runtime — see below.
 | [src/gemini_act/mcp/](src/gemini_act/mcp/) | Parsing and storage of user-connected MCP servers |
 | [src/gemini_act/oauth/](src/gemini_act/oauth/) | Consent flow and per-user token store |
 | [src/gemini_act/runner.py](src/gemini_act/runner.py) | ADK Runner and session wiring |
-| [agents/chat_agent/](agents/chat_agent/) | `adk web` entry point (anonymous mode) |
-| [agents/live_agent/](agents/live_agent/) | Same agent on a Live model, for talking to it out loud |
+| [src/adk_apps/chat_agent/](src/adk_apps/chat_agent/) | `adk web` entry point (anonymous mode) |
+| [src/adk_apps/live_agent/](src/adk_apps/live_agent/) | Same agent on a Live model, for talking to it out loud |
 
 ## Connecting your own MCP servers
 

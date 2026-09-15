@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from gemini_act.imobiliare_mcp import (
+from imobiliare.mcp import (
     anevar,
     costuri,
     dezvoltator,
@@ -350,7 +350,7 @@ def test_generated_dossier_carries_every_section_the_renderers_read():
 
 
 def test_demo_and_generated_dossiers_expose_the_same_sections():
-    from gemini_act.api.demo_data import DEMO_AUDIT_DATA
+    from imobiliare.api.demo_data import DEMO_AUDIT_DATA
 
     demo = dict(DEMO_AUDIT_DATA)
     server._completeaza_strategie(demo, None)
@@ -462,7 +462,7 @@ def test_levers_fire_on_the_shape_the_finishes_audit_actually_emits():
     Reading the wrong key meant the price levers were silently always empty on a
     real listing while the tests on synthetic phrases passed.
     """
-    from gemini_act.imobiliare_mcp import negociere
+    from imobiliare.mcp import negociere
 
     audit = {
         "calitate_generala_finisaje": {"stare_conservare": "Necesită renovare"},
@@ -516,7 +516,7 @@ def test_nothing_the_strategy_produces_goes_unrendered(tmp_path):
     """
     import subprocess
 
-    from gemini_act.imobiliare_mcp import negociere
+    from imobiliare.mcp import negociere
 
     plan = negociere.plan(
         {"price_eur": 179_000, "year_built": 1982, "seller_type": "individual"},
@@ -557,7 +557,7 @@ def test_abandon_is_provable_or_absent():
     the one abandon condition this pipeline can prove is arithmetic: a budget
     ceiling below the offer one would open at.
     """
-    from gemini_act.imobiliare_mcp import negociere
+    from imobiliare.mcp import negociere
 
     rec = {"price_eur": 179_000, "year_built": 1982, "seller_type": "individual"}
     normal = negociere.plan(rec, 154_000)
@@ -615,7 +615,7 @@ def test_web_table_links_each_comparable_and_never_invents_a_distance():
 
 def test_duplicate_relisting_with_blank_fields_is_removed():
     """The portal relists the same flat with a field left blank."""
-    from gemini_act.imobiliare_mcp.anevar import dedupe
+    from imobiliare.mcp.anevar import dedupe
 
     inregistrari = [
         {"id": "275969177", "price_eur": 108_000, "surface_sqm": 60, "year_built": 1969,
@@ -630,7 +630,7 @@ def test_duplicate_relisting_with_blank_fields_is_removed():
 
 def test_different_flats_at_the_same_price_are_kept():
     """Deduplication must not merge two genuinely different flats."""
-    from gemini_act.imobiliare_mcp.anevar import dedupe
+    from imobiliare.mcp.anevar import dedupe
 
     ramase = dedupe([
         {"id": "a", "price_eur": 108_000, "surface_sqm": 60, "year_built": 1969, "floor": 2},

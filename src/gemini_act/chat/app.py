@@ -11,11 +11,11 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from gemini_act.api.routes import router as api_router
 from gemini_act.chat.auth import require_chat_request
 from gemini_act.chat.events import handle_event, normalize_event
 from gemini_act.config import get_settings
 from gemini_act.oauth.routes import router as oauth_router
+from imobiliare.api.routes import router as api_router
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),

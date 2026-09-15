@@ -4,7 +4,7 @@ import os
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from gemini_act.imobiliare_mcp.electrocasnice_finisaje import (
+from imobiliare.mcp.electrocasnice_finisaje import (
     EUR_TO_RON_RATE,
     analizeaza_electrocasnice_si_finisaje,
     electrocasnice_finisaje_to_markdown,
@@ -12,8 +12,8 @@ from gemini_act.imobiliare_mcp.electrocasnice_finisaje import (
     genereaza_link_cautare_emag,
     genereaza_link_cautare_google,
 )
-from gemini_act.imobiliare_mcp.generator_pdf import genereaza_raport_complet_pdf
-from gemini_act.imobiliare_mcp.server import analizeaza_electrocasnice_si_defecte_finisaje
+from imobiliare.mcp.generator_pdf import genereaza_raport_complet_pdf
+from imobiliare.mcp.server import analizeaza_electrocasnice_si_defecte_finisaje
 
 
 def test_generare_linkuri_cautare():
@@ -192,11 +192,11 @@ def test_analiza_electrocasnice_gemini_vision_mock():
 
     with (
         patch(
-            "gemini_act.imobiliare_mcp.electrocasnice_finisaje._client",
+            "imobiliare.mcp.electrocasnice_finisaje._client",
             return_value=mock_client,
         ),
         patch(
-            "gemini_act.imobiliare_mcp.electrocasnice_finisaje._download",
+            "imobiliare.mcp.electrocasnice_finisaje._download",
             return_value=[(b"fake_jpeg", "image/jpeg")],
         ),
     ):
@@ -215,7 +215,7 @@ def test_analiza_electrocasnice_gemini_vision_mock():
 
 def test_mcp_server_tool_analizeaza_electrocasnice():
     with patch(
-        "gemini_act.imobiliare_mcp.electrocasnice_finisaje.analizeaza_electrocasnice_si_finisaje"
+        "imobiliare.mcp.electrocasnice_finisaje.analizeaza_electrocasnice_si_finisaje"
     ) as mock_impl:
         mock_impl.return_value = {"status": "success", "date_analiza": {"electrocasnice": []}}
         out = analizeaza_electrocasnice_si_defecte_finisaje("apartament bucuresti")

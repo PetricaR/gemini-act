@@ -10,7 +10,7 @@ import math
 
 import pytest
 
-from gemini_act.api import imagery
+from imobiliare.api import imagery
 
 
 class TestProjection:
@@ -88,7 +88,7 @@ class TestCategoryMetadata:
     def test_every_searched_category_has_a_pin_definition(self) -> None:
         """A category Places is queried for but the UI has no icon or colour for
         would silently render as a generic grey pin."""
-        from gemini_act.imobiliare_mcp import maps
+        from imobiliare.mcp import maps
 
         assert set(maps.PLACE_TYPES) == set(imagery.CATEGORY_META)
 

@@ -1,4 +1,4 @@
-"""Entry point for talking to the agent out loud: `adk web agents`, then the
+"""Entry point for talking to the agent out loud: `adk web src/adk_apps`, then the
 microphone.
 
 Same agent as `chat_agent` — same tools, same instruction — on a Live model

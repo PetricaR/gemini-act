@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from gemini_act.imobiliare_mcp import imo360
-from gemini_act.imobiliare_mcp.parse import filter_and_rank
+from imobiliare.mcp import imo360
+from imobiliare.mcp.parse import filter_and_rank
 
 # Shaped on a real response from the explorer endpoint.
 RAW = {
@@ -333,7 +333,7 @@ class _FakeClient:
 
 
 def test_search_drops_the_mis_filed_by_default_and_says_how_many(monkeypatch):
-    from gemini_act.imobiliare_mcp import server
+    from imobiliare.mcp import server
 
     listings = [raw(id=1, price=800), raw(id=2, price=180000), raw(id=3, price=190000)]
     monkeypatch.setattr(imo360, "Imo360Client", lambda *a, **kw: _FakeClient(listings))
@@ -347,7 +347,7 @@ def test_search_drops_the_mis_filed_by_default_and_says_how_many(monkeypatch):
 
 
 def test_search_can_be_asked_for_the_mis_filed_back(monkeypatch):
-    from gemini_act.imobiliare_mcp import server
+    from imobiliare.mcp import server
 
     listings = [raw(id=1, price=800), raw(id=2, price=180000)]
     monkeypatch.setattr(imo360, "Imo360Client", lambda *a, **kw: _FakeClient(listings, total=2))
@@ -360,7 +360,7 @@ def test_search_can_be_asked_for_the_mis_filed_back(monkeypatch):
 
 
 def test_search_reports_an_unknown_zone_as_an_error(monkeypatch):
-    from gemini_act.imobiliare_mcp import server
+    from imobiliare.mcp import server
 
     class _NoZones(_FakeClient):
         def find_zones(self, name, city=None, limit=8):

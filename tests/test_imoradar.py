@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from gemini_act.imobiliare_mcp import imoradar
+from imobiliare.mcp import imoradar
 
 
 def _ago(days: int) -> str:
@@ -496,7 +496,7 @@ def test_a_rise_counts_as_no_reduction():
 
 
 def test_the_search_tool_drops_the_mis_filed_by_default_and_counts_them(monkeypatch):
-    from gemini_act.imobiliare_mcp import server
+    from imobiliare.mcp import server
 
     root = f"{imoradar.BASE}/apartamente-de-vanzare/bucuresti/sector-3/titan"
     listings = [
@@ -519,7 +519,7 @@ def test_the_search_tool_drops_the_mis_filed_by_default_and_counts_them(monkeypa
 
 
 def test_the_search_tool_can_be_asked_for_the_mis_filed_back(monkeypatch):
-    from gemini_act.imobiliare_mcp import server
+    from imobiliare.mcp import server
 
     root = f"{imoradar.BASE}/apartamente-de-vanzare/bucuresti/sector-3/titan"
     listings = [raw(id=1, price="476 €"), raw(id=2, price="150.000 €")]
@@ -535,7 +535,7 @@ def test_the_search_tool_can_be_asked_for_the_mis_filed_back(monkeypatch):
 
 
 def test_the_search_tool_reports_an_unknown_zone_as_an_error(monkeypatch):
-    from gemini_act.imobiliare_mcp import server
+    from imobiliare.mcp import server
 
     monkeypatch.setattr(imoradar, "ImoradarClient", lambda *a, **kw: _FakeClient({}, places=()))
     out = server.cauta_imoradar(zona="Nicăieri", oras="bucuresti")
@@ -544,7 +544,7 @@ def test_the_search_tool_reports_an_unknown_zone_as_an_error(monkeypatch):
 
 
 def test_the_search_tool_narrows_the_room_count_through_the_url(monkeypatch):
-    from gemini_act.imobiliare_mcp import server
+    from imobiliare.mcp import server
 
     client = _FakeClient({})
     monkeypatch.setattr(imoradar, "ImoradarClient", lambda *a, **kw: client)
@@ -553,7 +553,7 @@ def test_the_search_tool_narrows_the_room_count_through_the_url(monkeypatch):
 
 
 def test_the_search_tool_asks_for_the_owner_segment_by_path(monkeypatch):
-    from gemini_act.imobiliare_mcp import server
+    from imobiliare.mcp import server
 
     client = _FakeClient({})
     monkeypatch.setattr(imoradar, "ImoradarClient", lambda *a, **kw: client)
@@ -562,7 +562,7 @@ def test_the_search_tool_asks_for_the_owner_segment_by_path(monkeypatch):
 
 
 def test_the_history_tool_never_calls_an_empty_history_a_stable_price(monkeypatch):
-    from gemini_act.imobiliare_mcp import server
+    from imobiliare.mcp import server
 
     class _NoHistory(_FakeClient):
         def price_history(self, listing_id):
@@ -578,7 +578,7 @@ def test_the_history_tool_never_calls_an_empty_history_a_stable_price(monkeypatc
 
 
 def test_the_history_tool_reports_the_reduction_and_the_age(monkeypatch):
-    from gemini_act.imobiliare_mcp import server
+    from imobiliare.mcp import server
 
     class _History(_FakeClient):
         def price_history(self, listing_id):
@@ -596,7 +596,7 @@ def test_the_history_tool_reports_the_reduction_and_the_age(monkeypatch):
 
 
 def test_the_history_tool_surfaces_a_refusal_as_an_error(monkeypatch):
-    from gemini_act.imobiliare_mcp import server
+    from imobiliare.mcp import server
 
     class _Refused(_FakeClient):
         def price_history(self, listing_id):

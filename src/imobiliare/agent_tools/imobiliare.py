@@ -33,7 +33,7 @@ import asyncio
 import logging
 from typing import Any
 
-from gemini_act.config import get_settings
+from imobiliare.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +154,8 @@ async def cauta_imobiliare_obscura(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.obscura import ObscuraBrowser, search_imobiliare_obscura
-        from gemini_act.imobiliare_mcp.server import Filters
+        from imobiliare.mcp.obscura import ObscuraBrowser, search_imobiliare_obscura
+        from imobiliare.mcp.server import Filters
 
         # Direct URL inspection via Obscura
         if url:
@@ -259,7 +259,7 @@ async def cauta_proprietati(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import Filters, cauta
+        from imobiliare.mcp.server import Filters, cauta
 
         filters = Filters(
             pret_max=pret_max,
@@ -334,7 +334,7 @@ async def reia_cautare(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import Filters, reia
+        from imobiliare.mcp.server import Filters, reia
 
         filtre = Filters(
             pret_max=pret_max,
@@ -377,7 +377,7 @@ async def detalii_proprietate(identificatori: list[str]) -> dict[str, Any]:
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import _resolve_id, detalii
+        from imobiliare.mcp.server import _resolve_id, detalii
 
         return detalii(ids=[_resolve_id(x) for x in identificatori])
 
@@ -411,7 +411,7 @@ async def statistici_piata(token: str, camere: int | None = None) -> dict[str, A
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import Filters, statistici
+        from imobiliare.mcp.server import Filters, statistici
 
         return statistici(token=token, filtre=Filters(camere=camere))
 
@@ -476,7 +476,7 @@ async def evalueaza_proprietate(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import evaluare
+        from imobiliare.mcp.server import evaluare
 
         return evaluare(
             identificator=identificator,
@@ -504,7 +504,7 @@ async def evalueaza_proprietate(
     if path:
         try:
             data = await asyncio.to_thread(lambda: open(path, "rb").read())
-            from gemini_act.chat.artifacts import put
+            from imobiliare.artifacts import put
 
             summary["raport_atasament"] = put(
                 f"evaluare-{result.get('id')}.md", "text/markdown", data
@@ -563,7 +563,7 @@ async def strategie_negociere(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import strategie_negociere as _strategie
+        from imobiliare.mcp.server import strategie_negociere as _strategie
 
         return _strategie(
             identificator=identificator,
@@ -606,7 +606,7 @@ async def inspecteaza_vizual_proprietate(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import inspecteaza_poze
+        from imobiliare.mcp.server import inspecteaza_poze
 
         return inspecteaza_poze(identificator=identificator, intrebare=intrebare)
 
@@ -644,7 +644,7 @@ async def analizeaza_mobilier_si_finisaje(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import (
+        from imobiliare.mcp.server import (
             analizeaza_mobilier_si_finisaje as server_tool,
         )
 
@@ -684,7 +684,7 @@ async def analizeaza_dezvoltator_si_constructor(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import (
+        from imobiliare.mcp.server import (
             analizeaza_dezvoltator_si_constructor as server_tool,
         )
 
@@ -729,7 +729,7 @@ async def analizeaza_materiale_si_specificatii_tehnice(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import (
+        from imobiliare.mcp.server import (
             analizeaza_materiale_si_specificatii_tehnice as server_tool,
         )
 
@@ -774,7 +774,7 @@ async def checklist_receptie_imobil_nou(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import (
+        from imobiliare.mcp.server import (
             checklist_receptie_imobil_nou as server_tool,
         )
 
@@ -815,7 +815,7 @@ async def analizeaza_strada_si_imprejurimi_street_view(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import (
+        from imobiliare.mcp.server import (
             analizeaza_strada_si_imprejurimi_street_view as server_tool,
         )
 
@@ -853,7 +853,7 @@ async def analizeaza_bonitate_dezvoltator_targetare(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import (
+        from imobiliare.mcp.server import (
             analizeaza_bonitate_dezvoltator_targetare as server_tool,
         )
 
@@ -888,7 +888,7 @@ async def recenzii_reputatie_google_maps(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import (
+        from imobiliare.mcp.server import (
             recenzii_reputatie_google_maps as server_tool,
         )
 
@@ -927,7 +927,7 @@ async def genereaza_raport_complet_pdf(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import (
+        from imobiliare.mcp.server import (
             genereaza_raport_complet_pdf as server_tool,
         )
 
@@ -986,7 +986,7 @@ async def analizeaza_electrocasnice_si_defecte_finisaje(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import (
+        from imobiliare.mcp.server import (
             analizeaza_electrocasnice_si_defecte_finisaje as server_tool,
         )
 
@@ -1038,7 +1038,7 @@ async def verifica_risc_seismic(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import verifica_risc_seismic as server_tool
+        from imobiliare.mcp.server import verifica_risc_seismic as server_tool
 
         return server_tool(
             adresa_sau_identificator=adresa_sau_identificator,
@@ -1129,7 +1129,7 @@ async def cauta_imo360_zona(
         return _imo360_disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import Filters, cauta_imo360
+        from imobiliare.mcp.server import Filters, cauta_imo360
 
         return cauta_imo360(
             zona=zona,
@@ -1192,7 +1192,7 @@ async def puls_piata_zona(
         return _imo360_disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import puls_piata
+        from imobiliare.mcp.server import puls_piata
 
         return puls_piata(zona=zona, oras=oras, tip=tip, camere=camere)
 
@@ -1223,7 +1223,7 @@ async def detalii_imo360_anunt(id_anunt: str) -> dict[str, Any]:
         return _imo360_disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import detalii_imo360
+        from imobiliare.mcp.server import detalii_imo360
 
         return detalii_imo360(id_anunt=id_anunt)
 
@@ -1337,7 +1337,7 @@ async def cauta_imoradar_agregat(
         return _imoradar_disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import Filters, cauta_imoradar
+        from imobiliare.mcp.server import Filters, cauta_imoradar
 
         return cauta_imoradar(
             zona=zona,
@@ -1408,7 +1408,7 @@ async def istoric_pret_imoradar_anunt(id_anunt: str) -> dict[str, Any]:
         return _imoradar_disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import istoric_pret_imoradar
+        from imobiliare.mcp.server import istoric_pret_imoradar
 
         return istoric_pret_imoradar(id_anunt=id_anunt)
 
@@ -1443,7 +1443,7 @@ async def documente_referinta_drive(reincarca: bool = False) -> dict[str, Any]:
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import documente_drive as server_tool
+        from imobiliare.mcp.server import documente_drive as server_tool
 
         return server_tool(reincarca=reincarca)
 
@@ -1474,7 +1474,7 @@ async def citeste_document_referinta(
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import citeste_document_drive as server_tool
+        from imobiliare.mcp.server import citeste_document_drive as server_tool
 
         return server_tool(identificator=identificator, de_la=de_la, max_caractere=max_caractere)
 
@@ -1502,7 +1502,7 @@ async def intreaba_document_referinta(identificator: str, intrebare: str) -> dic
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import intreaba_document_drive as server_tool
+        from imobiliare.mcp.server import intreaba_document_drive as server_tool
 
         return server_tool(identificator=identificator, intrebare=intrebare)
 
@@ -1527,7 +1527,7 @@ async def cauta_in_documente_referinta(termen: str) -> dict[str, Any]:
         return _disabled()
 
     def work() -> dict[str, Any]:
-        from gemini_act.imobiliare_mcp.server import cauta_in_documente_drive as server_tool
+        from imobiliare.mcp.server import cauta_in_documente_drive as server_tool
 
         return server_tool(termen=termen)
 

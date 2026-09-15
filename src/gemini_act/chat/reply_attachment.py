@@ -87,7 +87,7 @@ def parse_reply_attachment(raw: str, *, max_bytes: int) -> ReplyAttachment | Non
         return None
 
     if token := payload.get(_ARTIFACT_KEY):
-        from gemini_act.chat.artifacts import take
+        from imobiliare.artifacts import take
 
         if not isinstance(token, str) or not (stored := take(token)):
             return None

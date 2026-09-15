@@ -11,7 +11,8 @@ from typing import Any
 import httpx
 
 from gemini_act.agent.factory import build_agent
-from gemini_act.agent.tools.maps import (
+from gemini_act.config import Settings
+from imobiliare.agent_tools.maps import (
     MAPS_TOOLS,
     calculeaza_scor_accesibilitate,
     calculeaza_traseu,
@@ -20,7 +21,6 @@ from gemini_act.agent.tools.maps import (
     geocodare_adresa,
     matrice_distante,
 )
-from gemini_act.config import Settings
 
 
 def _test_settings(**overrides: Any) -> Settings:
@@ -34,7 +34,13 @@ def _test_settings(**overrides: Any) -> Settings:
 
 def test_maps_tools_fail_gracefully_without_api_key(monkeypatch):
     monkeypatch.setattr(
-        "gemini_act.agent.tools.maps.get_settings",
+        "imobiliare.agent_tools.maps.get_settings",
+        lambda: _test_settings(maps_api_key=""),
+    )
+    # `calculeaza_scor_accesibilitate` deleagă în pachetul `imobiliare`, care își
+    # citește propriile setări — altfel testul ar trece din întâmplare.
+    monkeypatch.setattr(
+        "imobiliare.mcp.accesibilitate.get_settings",
         lambda: _test_settings(maps_api_key=""),
     )
 
@@ -70,7 +76,7 @@ def test_maps_tools_fail_gracefully_without_api_key(monkeypatch):
 
 def test_geocodare_adresa_success(monkeypatch):
     monkeypatch.setattr(
-        "gemini_act.agent.tools.maps.get_settings",
+        "imobiliare.agent_tools.maps.get_settings",
         lambda: _test_settings(maps_api_key="mock-key"),
     )
 
@@ -103,7 +109,7 @@ def test_geocodare_adresa_success(monkeypatch):
 
 def test_calculeaza_traseu_success(monkeypatch):
     monkeypatch.setattr(
-        "gemini_act.agent.tools.maps.get_settings",
+        "imobiliare.agent_tools.maps.get_settings",
         lambda: _test_settings(maps_api_key="mock-key"),
     )
 
@@ -146,7 +152,7 @@ def test_calculeaza_traseu_success(monkeypatch):
 
 def test_matrice_distante_success(monkeypatch):
     monkeypatch.setattr(
-        "gemini_act.agent.tools.maps.get_settings",
+        "imobiliare.agent_tools.maps.get_settings",
         lambda: _test_settings(maps_api_key="mock-key"),
     )
 
@@ -180,7 +186,7 @@ def test_matrice_distante_success(monkeypatch):
 
 def test_cauta_locuri_in_apropiere_success(monkeypatch):
     monkeypatch.setattr(
-        "gemini_act.agent.tools.maps.get_settings",
+        "imobiliare.agent_tools.maps.get_settings",
         lambda: _test_settings(maps_api_key="mock-key"),
     )
 
@@ -209,7 +215,7 @@ def test_cauta_locuri_in_apropiere_success(monkeypatch):
 
 def test_detalii_locatie_success(monkeypatch):
     monkeypatch.setattr(
-        "gemini_act.agent.tools.maps.get_settings",
+        "imobiliare.agent_tools.maps.get_settings",
         lambda: _test_settings(maps_api_key="mock-key"),
     )
 
@@ -237,8 +243,10 @@ def test_detalii_locatie_success(monkeypatch):
 
 
 def test_calculeaza_scor_accesibilitate_composite(monkeypatch):
+    # Implementarea trăiește în `imobiliare.mcp.accesibilitate`; tool-ul din agent
+    # e doar wrapper-ul din care ADK derivă schema.
     monkeypatch.setattr(
-        "gemini_act.agent.tools.maps.get_settings",
+        "imobiliare.mcp.accesibilitate.get_settings",
         lambda: _test_settings(maps_api_key="mock-key"),
     )
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gemini_act.imobiliare_mcp import costuri
+from imobiliare.mcp import costuri
 
 
 def test_notary_fee_uses_the_documented_bracket_above_the_threshold():

@@ -3,11 +3,11 @@ import json
 import os
 from pathlib import Path
 
-from gemini_act.agent.tools.imobiliare import (
+from imobiliare.agent_tools.imobiliare import (
     genereaza_raport_complet_pdf as agent_genereaza_pdf,
 )
-from gemini_act.imobiliare_mcp.generator_pdf import genereaza_raport_complet_pdf
-from gemini_act.imobiliare_mcp.server import (
+from imobiliare.mcp.generator_pdf import genereaza_raport_complet_pdf
+from imobiliare.mcp.server import (
     genereaza_raport_complet_pdf as server_genereaza_pdf,
 )
 
@@ -269,7 +269,7 @@ def _extrage_text_pdf_streams(cale_pdf: str) -> str:
 
 def test_genereaza_raport_complet_pdf_toate_cele_12_capitole(tmp_path: Path) -> None:
     """Verifică generarea completă a raportului cu DEMO_AUDIT_DATA și prezența tuturor celor 12 capitole numerotate."""
-    from gemini_act.api.demo_data import DEMO_AUDIT_DATA
+    from imobiliare.api.demo_data import DEMO_AUDIT_DATA
 
     dest_pdf = str(tmp_path / "test_raport_complet_12_capitole.pdf")
     cale_rezultat = genereaza_raport_complet_pdf(DEMO_AUDIT_DATA, cale_iesire=dest_pdf)
@@ -345,7 +345,7 @@ def test_fontul_acopera_alfabetul_romanesc() -> None:
     """
     from reportlab.pdfbase import pdfmetrics
 
-    from gemini_act.imobiliare_mcp import generator_pdf
+    from imobiliare.mcp import generator_pdf
 
     assert generator_pdf.FONT_REGULAR != "Helvetica", "fontul Unicode nu a fost înregistrat"
     cmap = pdfmetrics.getFont(generator_pdf.FONT_REGULAR).face.charToGlyph
@@ -357,7 +357,7 @@ def test_txt_inlocuieste_glifele_nedesenabile() -> None:
     """Anything the font cannot draw is substituted or dropped, never boxed."""
     from reportlab.pdfbase import pdfmetrics
 
-    from gemini_act.imobiliare_mcp.generator_pdf import FONT_REGULAR, _txt
+    from imobiliare.mcp.generator_pdf import FONT_REGULAR, _txt
 
     cmap = pdfmetrics.getFont(FONT_REGULAR).face.charToGlyph
     iesire = _txt("Rating 4.6 ★ • preț → 209.000 € ⚠️ 🏠 ş/ţ")
@@ -375,8 +375,8 @@ def test_textul_dosarului_este_integral_desenabil() -> None:
     """
     from reportlab.pdfbase import pdfmetrics
 
-    from gemini_act.api.demo_data import DEMO_AUDIT_DATA
-    from gemini_act.imobiliare_mcp.generator_pdf import FONT_REGULAR, _txt
+    from imobiliare.api.demo_data import DEMO_AUDIT_DATA
+    from imobiliare.mcp.generator_pdf import FONT_REGULAR, _txt
 
     cmap = pdfmetrics.getFont(FONT_REGULAR).face.charToGlyph
 
@@ -401,7 +401,7 @@ def test_imaginea_pastreaza_proportiile(tmp_path: Path) -> None:
     """A photo is fitted inside its box, never stretched to fill it."""
     from PIL import Image as PILImage
 
-    from gemini_act.imobiliare_mcp.generator_pdf import _imagine_incadrata
+    from imobiliare.mcp.generator_pdf import _imagine_incadrata
 
     sursa = tmp_path / "lata.png"
     PILImage.new("RGB", (400, 100), "white").save(sursa)  # 4:1
@@ -414,7 +414,7 @@ def test_imaginea_pastreaza_proportiile(tmp_path: Path) -> None:
 
 def test_coloanele_fara_valori_sunt_eliminate() -> None:
     """A column whose every cell is a dash is dropped and its width reallocated."""
-    from gemini_act.imobiliare_mcp.generator_pdf import _elimina_coloane_goale
+    from imobiliare.mcp.generator_pdf import _elimina_coloane_goale
 
     randuri = [
         ["Anunț", "Dată", "Preț"],

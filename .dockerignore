@@ -12,4 +12,4 @@ credentials.json
 client_secret*.json
 web/node_modules/
 
-agents/*/.adk/
+src/adk_apps/*/.adk/

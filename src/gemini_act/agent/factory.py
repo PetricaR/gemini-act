@@ -109,7 +109,7 @@ def build_agent(
         live: Build the agent for a spoken conversation instead of Chat: the
             live model, its own thinking budget, and an instruction that drops
             the Chat-only formatting. Same tools either way. See
-            `Settings.live_model` and `agents/live_agent/`.
+            `Settings.live_model` and `src/adk_apps/live_agent/`.
     """
     settings = settings or get_settings()
     tools: list[Any] = [*BUSINESS_TOOLS, *CHAT_TOOLS, *build_search_tools(settings)]

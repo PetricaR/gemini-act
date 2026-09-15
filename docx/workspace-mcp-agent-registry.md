@@ -282,7 +282,7 @@ Agent.tools                                              [factory.py]
 ```
 
 `token_service is None` (the `adk web` / anonymous case —
-[`agents/chat_agent/agent.py`](../agents/chat_agent/agent.py)) short-circuits to an empty list:
+[`src/adk_apps/chat_agent/agent.py`](../src/adk_apps/chat_agent/agent.py)) short-circuits to an empty list:
 **all** Workspace toolsets are skipped, not just one, because none of them can act without a real
 Chat user's OAuth token. This is expected, not a bug — it's how local `adk web` testing is meant to
 work; only Chat tools and business tools are available there.

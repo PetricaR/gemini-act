@@ -18,7 +18,7 @@ from typing import Any
 
 import httpx
 
-from gemini_act.config import get_settings
+from imobiliare.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -146,88 +146,12 @@ def calculeaza_scor_accesibilitate(adresa_sau_coordonate: str) -> dict[str, Any]
         Scor de accesibilitate (0-100%), rating calitativ (Excelent, Bun, Moderat, Scăzut)
         și defalcarea detaliată a facilităților găsite.
     """
-    err = _require_key()
-    if err:
-        return {"status": "error", "mesaj": err}
+    # Implementarea trăiește în pachetul `imobiliare`, pentru că evaluarea o
+    # folosește la fel de mult ca agentul. Aici rămâne doar semnătura și
+    # docstring-ul, din care ADK derivă schema tool-ului.
+    from imobiliare.mcp.accesibilitate import calculeaza_scor_accesibilitate as _impl
 
-    resolved = _resolve_lat_lon(adresa_sau_coordonate)
-    if not resolved:
-        msg = f"Locația '{adresa_sau_coordonate}' nu a putut fi găsită."
-        return {"status": "error", "mesaj": msg}
-
-    lat, lon, formatted_addr = resolved
-
-    breakdown: dict[str, Any] = {}
-    total_score = 0.0
-    max_score = len(ACCESSIBILITY_CATEGORIES) * 10.0
-
-    field_mask = (
-        "places.displayName,places.location,places.rating,"
-        "places.userRatingCount,places.shortFormattedAddress"
-    )
-
-    with httpx.Client(timeout=TIMEOUT) as client:
-        for cat_key, (place_type, label) in ACCESSIBILITY_CATEGORIES.items():
-            try:
-                body = {
-                    "includedTypes": [place_type],
-                    "maxResultCount": 10,
-                    "locationRestriction": {
-                        "circle": {
-                            "center": {"latitude": lat, "longitude": lon},
-                            "radius": 1000.0,
-                        }
-                    },
-                }
-                resp = client.post(
-                    PLACES_NEARBY_URL,
-                    json=body,
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-Goog-Api-Key": _key(),
-                        "X-Goog-FieldMask": field_mask,
-                    },
-                )
-                places = resp.json().get("places", []) if resp.status_code == 200 else []
-            except Exception:
-                places = []
-
-            count = len(places)
-            cat_score = min(count * 2.0, 10.0)
-            total_score += cat_score
-
-            top_places = []
-            for p in places[:3]:
-                name = (p.get("displayName") or {}).get("text") or "Fără nume"
-                rating = p.get("rating")
-                top_places.append(f"{name}" + (f" ({rating}★)" if rating else ""))
-
-            breakdown[cat_key] = {
-                "categorie": label,
-                "numar_gasite": count,
-                "scor_categorie": cat_score,
-                "disponibil": count > 0,
-                "exemple": top_places,
-            }
-
-    final_score = round((total_score / max_score) * 100.0, 1) if max_score > 0 else 0.0
-    if final_score >= 80:
-        calificativ = "Excelent"
-    elif final_score >= 60:
-        calificativ = "Bun"
-    elif final_score >= 40:
-        calificativ = "Moderat"
-    else:
-        calificativ = "Scăzut"
-
-    return {
-        "status": "success",
-        "locatie": formatted_addr,
-        "coordonate": {"lat": lat, "lon": lon},
-        "scor_accesibilitate": final_score,
-        "calificativ": calificativ,
-        "detalii_categorii": breakdown,
-    }
+    return _impl(adresa_sau_coordonate)
 
 
 def calculeaza_traseu(

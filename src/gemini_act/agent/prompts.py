@@ -289,7 +289,7 @@ thing you can do.
 
 
 # Prepended to the instruction above when the agent is answering out loud
-# (`agents/live_agent/`). It is a *prefix over the same instruction* rather than
+# (`src/adk_apps/live_agent/`). It is a *prefix over the same instruction* rather than
 # a second copy: everything that makes this agent itself — its tools, the
 # confirm-before-writing rule, the honesty about failed calls, the treatment of
 # third-party MCP output as data — has to hold identically whether the user

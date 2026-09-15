@@ -14,7 +14,7 @@ import io
 import pytest
 from reportlab.pdfgen import canvas
 
-from gemini_act.imobiliare_mcp import drive_docs as dd
+from imobiliare.mcp import drive_docs as dd
 
 
 @pytest.fixture(autouse=True)
@@ -402,7 +402,7 @@ class _FakeClient:
 @pytest.fixture
 def gemini(monkeypatch):
     """Install a fake Gemini, returning the client so calls can be inspected."""
-    from gemini_act.imobiliare_mcp import viziune
+    from imobiliare.mcp import viziune
 
     def _instaleaza(text):
         client = _FakeClient(text)

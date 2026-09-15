@@ -1,4 +1,4 @@
-# Bug report — `src/gemini_act/imobiliare_mcp`
+# Bug report — `src/imobiliare/mcp`
 
 **Scope:** all 16 modules (8,754 LOC) of the imobiliare.ro MCP server.
 **Date:** 2026-09-12 · **Branch:** `main` (with uncommitted working-tree changes)
@@ -47,7 +47,7 @@ f"Recomandăm începerea negocierii de la <b>{val_min:,.0f} {moneda}</b>, "
 f"cu limită superioară la <b>{val_piata:,.0f} {moneda}</b>. "
 ```
 
-Any report where the valuation is unavailable — the exact payload [server.py:1045](src/gemini_act/imobiliare_mcp/server.py#L1045) now writes when fewer than 3 comparables qualify, and the one at [server.py:1062](src/gemini_act/imobiliare_mcp/server.py#L1062) written on *any* `evaluare()` exception — raises and produces no PDF at all.
+Any report where the valuation is unavailable — the exact payload [server.py:1045](src/imobiliare/mcp/server.py#L1045) now writes when fewer than 3 comparables qualify, and the one at [server.py:1062](src/imobiliare/mcp/server.py#L1062) written on *any* `evaluare()` exception — raises and produces no PDF at all.
 
 ```
 UnboundLocalError: cannot access local variable 'val_min' where it is not associated with a value
@@ -64,7 +64,7 @@ ajustare_pct = eval_anevar.get("ajustare_recomandata_procent", 0.0)
 accent_anevar = GOOGLE_GREEN if ajustare_pct >= -3.0 else GOOGLE_AMBER
 ```
 
-`ajustare_recomandata_procent` can legitimately be `None` ([server.py:1032](src/gemini_act/imobiliare_mcp/server.py#L1032) assigns `dif_pct`, which stays `None` when the asking price or the estimate is missing). `dict.get(key, default)` does **not** substitute for a key that is present and null, so the comparison runs against `None`:
+`ajustare_recomandata_procent` can legitimately be `None` ([server.py:1032](src/imobiliare/mcp/server.py#L1032) assigns `dif_pct`, which stays `None` when the asking price or the estimate is missing). `dict.get(key, default)` does **not** substitute for a key that is present and null, so the comparison runs against `None`:
 
 ```
 TypeError: '>=' not supported between instances of 'NoneType' and 'float'
@@ -80,7 +80,7 @@ if place:
     address = place.formatted_address or address   # AttributeError
 ```
 
-[maps.MapsPlace](src/gemini_act/imobiliare_mcp/maps.py#L88) defines `lat, lon, display, precision, place_id, location_type`. There is no `formatted_address`; the field is called `display`.
+[maps.MapsPlace](src/imobiliare/mcp/maps.py#L88) defines `lat, lon, display, precision, place_id, location_type`. There is no `formatted_address`; the field is called `display`.
 
 This line is **not** inside a `try`. `analizeaza_strada_si_imprejurimi_street_view` therefore crashes outright whenever it is given an address rather than a listing id or coordinates — the primary documented use of its own first parameter (*"Address (e.g. 'Calea Floreasca 160, Bucuresti')"*). Inside `genereaza_raport_complet_pdf` the same call *is* wrapped, so there the failure is invisible: the exterior audit silently becomes `indisponibil` for every address-based report.
 
@@ -91,13 +91,13 @@ This line is **not** inside a `try`. `analizeaza_strada_si_imprejurimi_street_vi
 cale_gal = contact_sheet(sub)
 ```
 
-[galerie.contact_sheet](src/gemini_act/imobiliare_mcp/galerie.py#L24) is `contact_sheet(urls: list[str], destination: Path, columns: int = 3, ...)` — two required positional arguments, the first a list of URLs, not a subject dict.
+[galerie.contact_sheet](src/imobiliare/mcp/galerie.py#L24) is `contact_sheet(urls: list[str], destination: Path, columns: int = 3, ...)` — two required positional arguments, the first a list of URLs, not a subject dict.
 
 ```
 TypeError: contact_sheet() missing 1 required positional argument: 'destination'
 ```
 
-Swallowed by the `except Exception` at line 1000, so the PDF report **never** contains a photo gallery. Contrast [server.py:454](src/gemini_act/imobiliare_mcp/server.py#L454), which calls it correctly.
+Swallowed by the `except Exception` at line 1000, so the PDF report **never** contains a photo gallery. Contrast [server.py:454](src/imobiliare/mcp/server.py#L454), which calls it correctly.
 
 ### 5. `anevar.py:501` — `ZeroDivisionError` on user-supplied weights
 **[reproduced]**
@@ -148,7 +148,7 @@ date_proprietate["an_constructie"]  = sub.get("year_built") or 2025
 loc_txt = ... or "Theodor Pallady, Sector 3, București"
 ```
 
-These constants were removed from the `setdefault` block in the working-tree change but left in the hydration assignments. The invented `75.2` mp is then multiplied into `interval_valoare_min` / `interval_valoare_max` / `pret_pe_mp_estimat` at [server.py:1016-1018](src/gemini_act/imobiliare_mcp/server.py#L1016) — i.e. it manufactures an *ANEVAR valuation interval* from a made-up surface.
+These constants were removed from the `setdefault` block in the working-tree change but left in the hydration assignments. The invented `75.2` mp is then multiplied into `interval_valoare_min` / `interval_valoare_max` / `pret_pe_mp_estimat` at [server.py:1016-1018](src/imobiliare/mcp/server.py#L1016) — i.e. it manufactures an *ANEVAR valuation interval* from a made-up surface.
 
 `tests/test_audit_integrity.py` greps only for the CUI/company strings, so it passes regardless.
 
@@ -168,9 +168,9 @@ if profit < 0:                        scor -= 2.5
 
 The same `7.0` default is hard-coded in three more places where a *missing* score is rendered as a real one:
 
-- [generator_pdf.py:726](src/gemini_act/imobiliare_mcp/generator_pdf.py#L726) `analiza_f.get("scor_sanatate_financiara", 7.0)`, plus `nivel_risc_insolventa` defaulting to `"Moderat"`
-- [generator_pdf.py:786](src/gemini_act/imobiliare_mcp/generator_pdf.py#L786) `analiza_r.get("scor_reputatie", 7.0)`
-- [recenzii_maps.py:322](src/gemini_act/imobiliare_mcp/recenzii_maps.py#L322) same
+- [generator_pdf.py:726](src/imobiliare/mcp/generator_pdf.py#L726) `analiza_f.get("scor_sanatate_financiara", 7.0)`, plus `nivel_risc_insolventa` defaulting to `"Moderat"`
+- [generator_pdf.py:786](src/imobiliare/mcp/generator_pdf.py#L786) `analiza_r.get("scor_reputatie", 7.0)`
+- [recenzii_maps.py:322](src/imobiliare/mcp/recenzii_maps.py#L322) same
 
 ### 10. `recenzii_maps.py:162` — `"apa"` matches `"apartament"`, inventing a water-damage red flag
 **[reproduced]**
@@ -250,7 +250,7 @@ date_proprietate["audit_exterior"]["disponibil"] = True
 date_proprietate["audit_exterior"]["provenienta"] = "model"
 ```
 
-[viziune_strada.analyse_street_and_surroundings](src/gemini_act/imobiliare_mcp/viziune_strada.py#L438) returns the analysis under `"audit"`, not `"analiza_vizuala_gemini"`. The result is always `{}` — and the next three lines then stamp that empty dict as available, measured and model-sourced. This **permanently suppresses** the `indisponibil` fallback at line 1125 and renders an "available" exterior audit consisting entirely of N/A.
+[viziune_strada.analyse_street_and_surroundings](src/imobiliare/mcp/viziune_strada.py#L438) returns the analysis under `"audit"`, not `"analiza_vizuala_gemini"`. The result is always `{}` — and the next three lines then stamp that empty dict as available, measured and model-sourced. This **permanently suppresses** the `indisponibil` fallback at line 1125 and renders an "available" exterior audit consisting entirely of N/A.
 
 ### 17. `comps.py:139` — the least documented comparable ranks first
 **[reproduced]**
@@ -299,11 +299,11 @@ except Exception as exc:
     return {"status": "success", "mod_analiza": "fallback_eroare_gemini", ...}
 ```
 
-The project's own `CLAUDE.md` states: *"Always return a dict with a `status` key — the system prompt tells the agent to trust it to tell success from failure, never to report a failed action as successful."* This returns `success` for a path whose own `mod_analiza` is literally `fallback_eroare_gemini`. [server.py:1074](src/gemini_act/imobiliare_mcp/server.py#L1074) gates on `status == "success"`, so keyword-matching guesswork is accepted and labelled `provenienta: "anunt"` in a section presented as a vision audit.
+The project's own `CLAUDE.md` states: *"Always return a dict with a `status` key — the system prompt tells the agent to trust it to tell success from failure, never to report a failed action as successful."* This returns `success` for a path whose own `mod_analiza` is literally `fallback_eroare_gemini`. [server.py:1074](src/imobiliare/mcp/server.py#L1074) gates on `status == "success"`, so keyword-matching guesswork is accepted and labelled `provenienta: "anunt"` in a section presented as a vision audit.
 
 ### 22. `server.py:424` — the insufficient-comparables branch returns the wrong record shape
 
-The `< 3` early return puts raw `normalise()` records under `"comparabile"`, while the success path at [server.py:549](src/gemini_act/imobiliare_mcp/server.py#L549) returns re-shaped dicts (`adresa`, `pret`, `suprafata`, `pret_mp`). `ValuationMeter.jsx` renders the list using the re-shaped field names, so the "comparabile identificate" table comes out blank in exactly the case where the user most needs to see what *was* found.
+The `< 3` early return puts raw `normalise()` records under `"comparabile"`, while the success path at [server.py:549](src/imobiliare/mcp/server.py#L549) returns re-shaped dicts (`adresa`, `pret`, `suprafata`, `pret_mp`). `ValuationMeter.jsx` renders the list using the re-shaped field names, so the "comparabile identificate" table comes out blank in exactly the case where the user most needs to see what *was* found.
 
 ### 23. `server.py:1056` — one canned reason for every failure mode
 
@@ -372,12 +372,12 @@ comps.py:26    CACHE_DIR = Path.home() / ".cache" / "imobiliare-mcp"
 locatie.py:31  CACHE_DIR = Path.home() / ".cache" / "imobiliare-mcp" / "geo"
 ```
 
-Both call `CACHE_DIR.mkdir(parents=True, exist_ok=True)` unconditionally. The codebase already knows this is wrong — [server.py:_reports_dir](src/gemini_act/imobiliare_mcp/server.py#L348) documents it precisely: *"Cloud Run's filesystem is read-only apart from /tmp, and `Path.home()` there is not writable"*. `comps._fetch_cached` is on the critical path of `evaluare`, so this is an `OSError: Read-only file system` in production, not a degraded cache.
+Both call `CACHE_DIR.mkdir(parents=True, exist_ok=True)` unconditionally. The codebase already knows this is wrong — [server.py:_reports_dir](src/imobiliare/mcp/server.py#L348) documents it precisely: *"Cloud Run's filesystem is read-only apart from /tmp, and `Path.home()` there is not writable"*. `comps._fetch_cached` is on the critical path of `evaluare`, so this is an `OSError: Read-only file system` in production, not a degraded cache.
 
 ### 30. Two more writes outside `/tmp`
 
-- [generator_pdf.py:292](src/gemini_act/imobiliare_mcp/generator_pdf.py#L292) — `rep_dir = Path("reports")`, relative to the process CWD (`/app` on Cloud Run).
-- [viziune_strada.py:324](src/gemini_act/imobiliare_mcp/viziune_strada.py#L324) — `target_dir = Path(save_dir) if save_dir else Path.cwd()`.
+- [generator_pdf.py:292](src/imobiliare/mcp/generator_pdf.py#L292) — `rep_dir = Path("reports")`, relative to the process CWD (`/app` on Cloud Run).
+- [viziune_strada.py:324](src/imobiliare/mcp/viziune_strada.py#L324) — `target_dir = Path(save_dir) if save_dir else Path.cwd()`.
 
 Neither routes through `_reports_dir()`.
 

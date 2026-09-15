@@ -7,9 +7,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gemini_act.agent.tools import imobiliare as agent_tools
 from gemini_act.config import Settings
-from gemini_act.imobiliare_mcp import dezvoltator, server
+from imobiliare.agent_tools import imobiliare as agent_tools
+from imobiliare.mcp import dezvoltator, server
 
 
 def _settings(**overrides) -> Settings:
@@ -347,7 +347,7 @@ def test_server_tools_resolution(monkeypatch):
     monkeypatch.setattr(server, "_client", lambda: fake_client_ctx)
     monkeypatch.setattr(server, "normalise", lambda raw: mock_subject)
 
-    with patch("gemini_act.imobiliare_mcp.dezvoltator.analyse_developer_and_builder") as mock_dev:
+    with patch("imobiliare.mcp.dezvoltator.analyse_developer_and_builder") as mock_dev:
         mock_dev.return_value = {"status": "success", "proiect": "Apartament One Floreasca"}
         # Pass numeric ID
         res = server.analizeaza_dezvoltator_si_constructor("275807510")
@@ -355,7 +355,7 @@ def test_server_tools_resolution(monkeypatch):
         mock_dev.assert_called_once()
 
     with patch(
-        "gemini_act.imobiliare_mcp.dezvoltator.analyse_construction_materials"
+        "imobiliare.mcp.dezvoltator.analyse_construction_materials"
     ) as mock_mat:
         mock_mat.return_value = {"status": "success"}
         res2 = server.analizeaza_materiale_si_specificatii_tehnice("275807510")

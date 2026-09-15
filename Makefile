@@ -13,11 +13,11 @@ local:  ## Run the full app locally (FastAPI backend + React Web UI)
 	./start_local.sh
 
 dev:  ## ADK dev UI (anonymous mode — no Workspace tools)
-	uv run adk web agents
+	uv run adk web src/adk_apps
 
 voice:  ## Talk to the agent out loud (ADK dev UI, pick `live_agent`, click the mic)
 	@echo "Open http://localhost:8000, select the \033[1mlive_agent\033[0m agent, then click the microphone."
-	uv run adk web agents
+	uv run adk web src/adk_apps
 
 serve:  ## Run the Chat webhook locally on :8080
 	uv run uvicorn gemini_act.chat.app:app --reload --port 8080

@@ -7,7 +7,7 @@ import io
 import httpx
 import pytest
 
-from gemini_act.imobiliare_mcp.galerie import contact_sheet
+from imobiliare.mcp.galerie import contact_sheet
 
 PIL = pytest.importorskip("PIL", reason="contact_sheet is a no-op without Pillow")
 

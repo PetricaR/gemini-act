@@ -36,7 +36,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from gemini_act.config import get_settings
+from imobiliare.config import get_settings
 
 from . import throttle
 

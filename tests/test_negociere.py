@@ -4,7 +4,7 @@ from itertools import pairwise
 
 import pytest
 
-from gemini_act.imobiliare_mcp import negociere
+from imobiliare.mcp import negociere
 
 
 def _listing(**overrides):
@@ -192,7 +192,7 @@ def test_decision_rule_quotes_the_ladder():
 def test_compact_strategy_drops_the_prose_but_keeps_the_numbers():
     """Three draft offers and three checklists belong in the report, not in every
     valuation's return value."""
-    from gemini_act.imobiliare_mcp.server import _strategie_pe_scurt
+    from imobiliare.mcp.server import _strategie_pe_scurt
 
     plan = negociere.plan(_listing(), 154_000, constatari=["instalatie electrica pe aluminiu"])
     scurt = _strategie_pe_scurt(plan)
@@ -207,7 +207,7 @@ def test_compact_strategy_drops_the_prose_but_keeps_the_numbers():
 
 
 def test_compact_strategy_passes_an_unavailable_plan_through_unchanged():
-    from gemini_act.imobiliare_mcp.server import _strategie_pe_scurt
+    from imobiliare.mcp.server import _strategie_pe_scurt
 
     plan = negociere.plan(_listing(), None)
     assert _strategie_pe_scurt(plan) == plan

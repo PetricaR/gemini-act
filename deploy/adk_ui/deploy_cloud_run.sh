@@ -43,7 +43,7 @@
 #      default (1.5s against 1.2s between calls to one host). Cloud Run egresses
 #      from a shared Google address pool rather than from an office IP, so the
 #      address this service appears as is one it does not control and may not
-#      arrive with a clean reputation. See imobiliare_mcp/throttle.py.
+#      arrive with a clean reputation. See imobiliare/mcp/throttle.py.
 #
 #   6. --timeout=3600 is for the live (bidi streaming) socket. Cloud Run closes
 #      a request at the timeout whether or not it is a WebSocket, and 3600 is
@@ -138,7 +138,7 @@ gcloud run deploy "${SERVICE}" \
   --add-volume=name=gcs,type=cloud-storage,bucket="${BUCKET}" \
   --add-volume-mount=volume=gcs,mount-path="${MOUNT_PATH}" \
   --command=adk \
-  --args="^|^web|--host|0.0.0.0|--port|8080|--session_service_uri|memory://|--artifact_service_uri|gs://${BUCKET}|/app/agents" \
+  --args="^|^web|--host|0.0.0.0|--port|8080|--session_service_uri|memory://|--artifact_service_uri|gs://${BUCKET}|/app/src/adk_apps" \
   --set-env-vars="^##^GOOGLE_CLOUD_PROJECT=${PROJECT}##GOOGLE_CLOUD_LOCATION=${VERTEX_LOCATION}##GOOGLE_GENAI_USE_VERTEXAI=TRUE##GEMINI_ACT_MODEL=${MODEL}##GEMINI_ACT_THINKING_LEVEL=${THINKING_LEVEL}##GEMINI_ACT_TOKEN_STORE=memory##GEMINI_ACT_PROJECT_NUMBER=${PROJECT_NUM}##GOOGLE_API_USE_CLIENT_CERTIFICATE=false##IMOBILIARE_REPORTS_DIR=${REPORTS_DIR}##IMOBILIARE_CACHE_DIR=/tmp/imobiliare-cache##IMOBILIARE_MIN_INTERVAL=${IMOBILIARE_MIN_INTERVAL:-1.5}##IMOBILIARE_JITTER=${IMOBILIARE_JITTER:-0.8}##IMOBILIARE_MAX_PARALLEL=${IMOBILIARE_MAX_PARALLEL:-2}##GEMINI_API_KEY=${GEMINI_API_KEY:-}##GEMINI_ACT_MAPS_API_KEY=${GEMINI_ACT_MAPS_API_KEY:-}##GEMINI_ACT_IMOBILIARE_SESSION_ID=${GEMINI_ACT_IMOBILIARE_SESSION_ID:-}" \
   --quiet
 

@@ -160,7 +160,7 @@ def _client() -> ImobiliareClient:
     session = os.environ.get("IMOBILIARE_SESSION_ID")
     if not session:
         try:
-            from gemini_act.config import get_settings
+            from imobiliare.config import get_settings
 
             session = get_settings().imobiliare_session_id or None
         except Exception:  # noqa: BLE001 - standalone use has no gemini_act settings
@@ -1271,7 +1271,7 @@ def evaluare(
     scor_acces = None
     if place is not None and maps.available():
         try:
-            from gemini_act.agent.tools.maps import calculeaza_scor_accesibilitate
+            from imobiliare.mcp.accesibilitate import calculeaza_scor_accesibilitate
 
             res = calculeaza_scor_accesibilitate(f"{place.lat},{place.lon}")
             if res.get("status") == "success":
@@ -2551,7 +2551,7 @@ def genereaza_raport_complet_pdf(
     # Locație & Facilități 500m
     if "locatie" not in date_proprietate:
         try:
-            from gemini_act.api import imagery
+            from imobiliare.api import imagery
 
             date_proprietate["locatie"] = imagery.build_location_block(
                 date_proprietate.get("adresa") or "",

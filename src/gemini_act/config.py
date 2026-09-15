@@ -220,7 +220,7 @@ class Settings(BaseSettings):
     # above: ADK's live mode holds one bidirectional audio session open
     # (`Runner.run_live`, the microphone in `adk web`) and only the Live model
     # family can serve one. `gemini-3.8-flash` does not degrade gracefully
-    # there — it never connects. So the live entry point (`agents/live_agent/`)
+    # there — it never connects. So the live entry point (`src/adk_apps/live_agent/`)
     # runs the same tools and the same instruction on a second model.
     #
     # gemini-3.1-flash-live-preview is the current one: audio in, audio out,

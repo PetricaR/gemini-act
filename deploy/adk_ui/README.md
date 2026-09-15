@@ -82,7 +82,7 @@ gcloud storage ls gs://gemini-act-rapoarte-428056592625/rapoarte/
 The portal answers an over-eager client with an anti-bot interstitial —
 *"Am detectat o anomalie în comportamentul browserului dumneavoastră"* — served as a
 **200 with an HTML body**, which is why a naive client parses it as data and never
-notices. `imobiliare_mcp/throttle.py` handles all three parts of that: it de-duplicates
+notices. `imobiliare/mcp/throttle.py` handles all three parts of that: it de-duplicates
 (one listing is fetched once per run however many tools ask for it), paces what is left
 per host, and detects the interstitial in order to stop.
 

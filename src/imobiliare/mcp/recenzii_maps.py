@@ -12,7 +12,7 @@ import httpx
 from google import genai
 from google.genai import types
 
-from gemini_act.config import get_settings
+from imobiliare.config import get_settings
 
 logger = logging.getLogger(__name__)
 

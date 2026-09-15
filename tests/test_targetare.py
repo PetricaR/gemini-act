@@ -2,7 +2,7 @@
 
 import pytest
 
-from gemini_act.imobiliare_mcp.targetare import (
+from imobiliare.mcp.targetare import (
     analizeaza_sanatate_financiara,
     targetare_to_markdown,
     validate_tax_id,

@@ -9,7 +9,7 @@ import logging
 import urllib.parse
 from typing import Any
 
-from gemini_act.config import get_settings
+from imobiliare.config import get_settings
 
 from .viziune import _client, _download, _facts
 

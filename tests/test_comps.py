@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from gemini_act.imobiliare_mcp.comps import (
+from imobiliare.mcp.comps import (
     _parse_offer,
     area_slug_of,
     rank_by_similarity,

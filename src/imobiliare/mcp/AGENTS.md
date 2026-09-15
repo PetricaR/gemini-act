@@ -6,7 +6,7 @@ An MCP server wrapping imobiliare.ro's AI property search. `README.md` covers
 ## Layout
 
 ```
-src/imobiliare_mcp/
+src/imobiliare/mcp/
   client.py   HTTP against the two upstream hosts; session handling
   imo360.py   the second source: session-free, geographic, carries rentals
   imoradar.py the third source: an aggregator over every major RO portal
@@ -46,7 +46,7 @@ token gives you a stable 240-listing fixture to develop filters against.
 .venv/bin/python -c "
 import sys; sys.path.insert(0,'src')
 import logging; logging.disable(logging.INFO)   # httpx logs every request at INFO
-from imobiliare_mcp.server import reia, Filters
+from imobiliare.mcp.server import reia, Filters
 print(reia(token=open('token.txt').read().strip(),
            filtre=Filters(camere=3, pret_max=220000))['matched'])"
 ```

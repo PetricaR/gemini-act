@@ -16,8 +16,8 @@ import json
 import logging
 from typing import Any
 
-from gemini_act.config import get_settings
-from gemini_act.imobiliare_mcp import viziune
+from imobiliare.config import get_settings
+from imobiliare.mcp import viziune
 
 logger = logging.getLogger(__name__)
 

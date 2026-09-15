@@ -717,7 +717,7 @@ def _gemini(date: bytes, doc: Document, intrebare: str) -> str:
             "google-genai nu este disponibil, deci documentul nu poate fi citit vizual."
         ) from exc
 
-    from gemini_act.config import get_settings
+    from imobiliare.config import get_settings
 
     from . import viziune
 

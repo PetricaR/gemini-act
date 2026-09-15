@@ -31,7 +31,7 @@ from typing import Any
 
 import httpx
 
-from gemini_act.imobiliare_mcp import maps
+from imobiliare.mcp import maps
 
 logger = logging.getLogger(__name__)
 

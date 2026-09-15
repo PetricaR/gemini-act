@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import pytest
 
-from gemini_act.agent.tools import imobiliare as tools
-from gemini_act.chat import artifacts
 from gemini_act.config import Settings
-from gemini_act.imobiliare_mcp import maps, viziune
+from imobiliare import artifacts
+from imobiliare.agent_tools import imobiliare as tools
+from imobiliare.mcp import maps, viziune
 
 
 def _settings(**overrides) -> Settings:
@@ -97,7 +97,7 @@ def test_geocode_reads_googles_own_precision_verdict(with_maps_key, monkeypatch)
 def test_every_amenity_category_maps_to_a_place_type():
     """`raport.py` renders the OSM category list, so a category with no Google
     equivalent would silently be an always-empty row."""
-    from gemini_act.imobiliare_mcp.locatie import CATEGORIES
+    from imobiliare.mcp.locatie import CATEGORIES
 
     assert set(maps.PLACE_TYPES) == set(CATEGORIES)
 
@@ -188,7 +188,7 @@ async def test_a_raised_exception_becomes_a_reported_failure(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("upstream is down")
 
-    monkeypatch.setattr("gemini_act.imobiliare_mcp.server.evaluare", boom)
+    monkeypatch.setattr("imobiliare.mcp.server.evaluare", boom)
     result = await tools.evalueaza_proprietate("275807510")
     assert result["status"] == "error"
     assert "upstream is down" in result["error_message"]
@@ -199,11 +199,11 @@ async def test_a_session_failure_falls_back_to_obscura(monkeypatch):
     seamlessly falls back to Obscura search."""
     monkeypatch.setattr(tools, "get_settings", lambda: _settings())
     monkeypatch.setattr(
-        "gemini_act.imobiliare_mcp.server.cauta",
+        "imobiliare.mcp.server.cauta",
         lambda **k: {"error": "No session_id configured."},
     )
     monkeypatch.setattr(
-        "gemini_act.imobiliare_mcp.obscura.search_imobiliare_obscura",
+        "imobiliare.mcp.obscura.search_imobiliare_obscura",
         lambda **k: {
             "engine": "obscura",
             "matched": 1,
@@ -220,11 +220,11 @@ async def test_a_search_failure_when_both_engines_fail(monkeypatch):
     """When both legacy search and Obscura fail, an error status is returned."""
     monkeypatch.setattr(tools, "get_settings", lambda: _settings())
     monkeypatch.setattr(
-        "gemini_act.imobiliare_mcp.server.cauta",
+        "imobiliare.mcp.server.cauta",
         lambda **k: {"error": "No session_id configured."},
     )
     monkeypatch.setattr(
-        "gemini_act.imobiliare_mcp.obscura.search_imobiliare_obscura",
+        "imobiliare.mcp.obscura.search_imobiliare_obscura",
         lambda **k: {"error": "Obscura failed to fetch sitemap"},
     )
     result = await tools.cauta_proprietati("apartament 3 camere")
@@ -243,7 +243,7 @@ async def test_the_report_is_staged_not_returned_as_text(monkeypatch, tmp_path):
     report.write_text(body, encoding="utf-8")
 
     monkeypatch.setattr(
-        "gemini_act.imobiliare_mcp.server.evaluare",
+        "imobiliare.mcp.server.evaluare",
         lambda **k: {
             "raport": str(report),
             "id": "275807510",
@@ -272,7 +272,7 @@ async def test_an_unreadable_report_still_returns_the_figures(monkeypatch):
     failures; the numbers are worth having either way."""
     monkeypatch.setattr(tools, "get_settings", lambda: _settings())
     monkeypatch.setattr(
-        "gemini_act.imobiliare_mcp.server.evaluare",
+        "imobiliare.mcp.server.evaluare",
         lambda **k: {"raport": "/nonexistent/nope.md", "id": "1", "valoare_estimata_eur": 100000},
     )
     result = await tools.evalueaza_proprietate("1")
@@ -285,7 +285,7 @@ async def test_an_unreadable_report_still_returns_the_figures(monkeypatch):
 async def test_a_valuation_error_is_passed_through(monkeypatch):
     monkeypatch.setattr(tools, "get_settings", lambda: _settings())
     monkeypatch.setattr(
-        "gemini_act.imobiliare_mcp.server.evaluare",
+        "imobiliare.mcp.server.evaluare",
         lambda **k: {"error": "Nicio comparabilă în zona 'x' cu 3 camere."},
     )
     result = await tools.evalueaza_proprietate("1")
@@ -297,7 +297,7 @@ async def test_listings_are_trimmed_before_reaching_the_model(monkeypatch):
     """A hydrate record carries a large tracking block the model has no use for."""
     monkeypatch.setattr(tools, "get_settings", lambda: _settings())
     monkeypatch.setattr(
-        "gemini_act.imobiliare_mcp.server.detalii",
+        "imobiliare.mcp.server.detalii",
         lambda ids: {
             "count": 1,
             "listings": [
@@ -318,7 +318,7 @@ async def test_listings_are_trimmed_before_reaching_the_model(monkeypatch):
 async def test_reia_cautare_success(monkeypatch):
     monkeypatch.setattr(tools, "get_settings", lambda: _settings())
     monkeypatch.setattr(
-        "gemini_act.imobiliare_mcp.server.reia",
+        "imobiliare.mcp.server.reia",
         lambda token, filtre, sort, limit: {
             "total_hits": 100,
             "matched": 5,
@@ -337,7 +337,7 @@ async def test_reia_cautare_success(monkeypatch):
 async def test_inspecteaza_vizual_proprietate_success(monkeypatch):
     monkeypatch.setattr(tools, "get_settings", lambda: _settings())
     monkeypatch.setattr(
-        "gemini_act.imobiliare_mcp.server.inspecteaza_poze",
+        "imobiliare.mcp.server.inspecteaza_poze",
         lambda identificator, intrebare: {
             "listing_id": "2759",
             "titlu": "Apt 2 camere",
@@ -355,8 +355,8 @@ async def test_inspecteaza_vizual_proprietate_success(monkeypatch):
 
 
 def test_raport_renders_image_links_and_accessibility_score():
-    from gemini_act.imobiliare_mcp import raport
-    from gemini_act.imobiliare_mcp.anevar import Params, evaluate
+    from imobiliare.mcp import raport
+    from imobiliare.mcp.anevar import Params, evaluate
 
     subject = {
         "id": "12345",
@@ -482,7 +482,7 @@ async def test_analizeaza_mobilier_si_finisaje_success(monkeypatch):
     }
 
     monkeypatch.setattr(
-        "gemini_act.imobiliare_mcp.server.analizeaza_mobilier_si_finisaje",
+        "imobiliare.mcp.server.analizeaza_mobilier_si_finisaje",
         lambda identificator, limita_fotografii: {
             "status": "success",
             "inventar": mock_inventar,
@@ -504,7 +504,7 @@ async def test_analizeaza_mobilier_si_finisaje_success(monkeypatch):
 
 
 def test_viziune_furniture_finishes_markdown_rendering():
-    from gemini_act.imobiliare_mcp.viziune import furniture_finishes_to_markdown
+    from imobiliare.mcp.viziune import furniture_finishes_to_markdown
 
     data = {
         "mobilier_pe_camere": [

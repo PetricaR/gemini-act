@@ -10,8 +10,8 @@ aplicația web:
 |---|---|---|---|
 | 1 | **Sample (demo)** | `api/demo_data.py` — set scris de mână | `/api/audit/demo` → web + PDF |
 | 2 | **Web** | `web/src/App.jsx` + 15 componente | browser |
-| 3 | **PDF** | `imobiliare_mcp/generator_pdf.py` | descărcare din web, atașament Chat |
-| 4 | **Markdown SEV** | `imobiliare_mcp/raport.py` | unealta `evaluare`, atașament Chat |
+| 3 | **PDF** | `imobiliare/mcp/generator_pdf.py` | descărcare din web, atașament Chat |
+| 4 | **Markdown SEV** | `imobiliare/mcp/raport.py` | unealta `evaluare`, atașament Chat |
 
 ---
 
@@ -262,18 +262,18 @@ măsurat live din ofertele active (`_analiza_piata`), nu citat dintr-un document
 ## 8. Ce s-a implementat
 
 **Module noi**
-- `src/gemini_act/imobiliare_mcp/negociere.py` — scara, profilul, pârghiile, steagurile, scripturile, verificările
-- `src/gemini_act/imobiliare_mcp/costuri.py` — onorarii, taxe, buget consolidat
+- `src/imobiliare/mcp/negociere.py` — scara, profilul, pârghiile, steagurile, scripturile, verificările
+- `src/imobiliare/mcp/costuri.py` — onorarii, taxe, buget consolidat
 
 **Modificate**
-- `imobiliare_mcp/server.py` — unealta `strategie_negociere`; `_analiza_piata` (micro-piață măsurată); `_completeaza_strategie` (umple toate secțiunile lipsă ale dosarului); `evaluare` întoarce `piata`, `strategie_negociere`, `buget_consolidat`
-- `imobiliare_mcp/generator_pdf.py` — secțiunea de negociere (scară, profil, pârghii, regulă decizională); tabel de buget consolidat; **eliminate toate valorile fabricate** de la P2
-- `imobiliare_mcp/raport.py` — secțiunile `13b. Strategia de negociere` și `13c. Bugetul consolidat`
+- `imobiliare/mcp/server.py` — unealta `strategie_negociere`; `_analiza_piata` (micro-piață măsurată); `_completeaza_strategie` (umple toate secțiunile lipsă ale dosarului); `evaluare` întoarce `piata`, `strategie_negociere`, `buget_consolidat`
+- `imobiliare/mcp/generator_pdf.py` — secțiunea de negociere (scară, profil, pârghii, regulă decizională); tabel de buget consolidat; **eliminate toate valorile fabricate** de la P2
+- `imobiliare/mcp/raport.py` — secțiunile `13b. Strategia de negociere` și `13c. Bugetul consolidat`
 - `api/routes.py` — demo și raportul real trec prin aceeași funcție de completare
 - `web/src/components/NegotiationStrategy.jsx` — componentă nouă
 - `web/src/components/MarketAndRisk.jsx` — acceptă structura de costuri calculată; indicatorii nemăsurați apar ca „Nedeterminat”, nu ca 0%
 - `web/src/App.jsx` — tab nou „Negociere & buget”
-- `agent/tools/imobiliare.py`, `agent/prompts.py` — unealta expusă agentului din Chat
+- `imobiliare/mcp/agent_tools.py`, `gemini_act/agent/prompts.py` — unealta expusă agentului din Chat
 - `Makefile`, `CLAUDE.md`, `README.md` — calea corectă a scriptului de deploy
 
 **Teste** — `tests/test_negociere.py` (25), `tests/test_costuri.py` (11),
@@ -307,5 +307,5 @@ toate trec; `ruff` curat pe tot ce a fost atins.
   răspunsul vine de la frontend-ul Google, nu de la aplicație. Preexistent; scriptul de
   deploy anunță acel URL la final, deci induce în eroare.
 - **Datoria de lint din `generator_pdf.py`**: 160 → 141 erori E501, restul preexistent.
-- **Playbook-ul** a fost mutat în `src/gemini_act/imobiliare_mcp/docx/`; `negociere.md`,
+- **Playbook-ul** a fost mutat în `src/imobiliare/mcp/docx/`; `negociere.md`,
   care exista la începutul sesiunii, nu mai era pe disc când am încercat să îl citesc.

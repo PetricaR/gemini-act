@@ -12,9 +12,9 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from gemini_act.api import imagery
-from gemini_act.api.demo_data import DEMO_AUDIT_DATA
-from gemini_act.imobiliare_mcp import generator_pdf, paths, server
+from imobiliare.api import imagery
+from imobiliare.api.demo_data import DEMO_AUDIT_DATA
+from imobiliare.mcp import generator_pdf, paths, server
 
 logger = logging.getLogger(__name__)
 

@@ -13,7 +13,7 @@ import time
 import httpx
 import pytest
 
-from gemini_act.imobiliare_mcp import throttle
+from imobiliare.mcp import throttle
 
 INTERSTITIAL = (
     "<html><body><h1>Am detectat o anomalie în comportamentul browserului "

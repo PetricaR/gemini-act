@@ -1,6 +1,6 @@
 """Unit tests for Google Maps reviews analysis module."""
 
-from gemini_act.imobiliare_mcp.recenzii_maps import (
+from imobiliare.mcp.recenzii_maps import (
     _analiza_reguli_fallback,
     recenzii_to_markdown,
 )

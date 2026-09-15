@@ -8,9 +8,9 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from gemini_act.agent.tools import imobiliare as agent_tools
 from gemini_act.config import Settings
-from gemini_act.imobiliare_mcp import maps, server, viziune_strada
+from imobiliare.agent_tools import imobiliare as agent_tools
+from imobiliare.mcp import maps, server, viziune_strada
 
 
 def _settings(**overrides) -> Settings:
@@ -120,8 +120,8 @@ def test_street_view_metadata_success():
     }
 
     with (
-        patch("gemini_act.imobiliare_mcp.maps.available", return_value=True),
-        patch("gemini_act.imobiliare_mcp.maps._key", return_value="dummy_key"),
+        patch("imobiliare.mcp.maps.available", return_value=True),
+        patch("imobiliare.mcp.maps._key", return_value="dummy_key"),
         patch.object(httpx.Client, "get", return_value=mock_resp),
     ):
         meta = maps.street_view_metadata(44.4325, 26.1038)
@@ -132,15 +132,15 @@ def test_street_view_metadata_success():
 
 
 def test_street_view_metadata_unavailable_or_error():
-    with patch("gemini_act.imobiliare_mcp.maps.available", return_value=False):
+    with patch("imobiliare.mcp.maps.available", return_value=False):
         meta = maps.street_view_metadata(44.4325, 26.1038)
         assert meta is None
 
     mock_resp = MagicMock()
     mock_resp.status_code = 500
     with (
-        patch("gemini_act.imobiliare_mcp.maps.available", return_value=True),
-        patch("gemini_act.imobiliare_mcp.maps._key", return_value="dummy_key"),
+        patch("imobiliare.mcp.maps.available", return_value=True),
+        patch("imobiliare.mcp.maps._key", return_value="dummy_key"),
         patch.object(httpx.Client, "get", return_value=mock_resp),
     ):
         meta = maps.street_view_metadata(44.4325, 26.1038)
@@ -155,8 +155,8 @@ def test_satellite_view_success():
     mock_resp.content = fake_png
 
     with (
-        patch("gemini_act.imobiliare_mcp.maps.available", return_value=True),
-        patch("gemini_act.imobiliare_mcp.maps._key", return_value="dummy_key"),
+        patch("imobiliare.mcp.maps.available", return_value=True),
+        patch("imobiliare.mcp.maps._key", return_value="dummy_key"),
         patch.object(httpx.Client, "get", return_value=mock_resp),
     ):
         img = maps.satellite_view(44.4325, 26.1038, zoom=18)
@@ -164,7 +164,7 @@ def test_satellite_view_success():
 
 
 def test_satellite_view_unavailable():
-    with patch("gemini_act.imobiliare_mcp.maps.available", return_value=False):
+    with patch("imobiliare.mcp.maps.available", return_value=False):
         assert maps.satellite_view(44.4325, 26.1038) is None
 
 
@@ -175,10 +175,10 @@ def test_street_view_angles():
     mock_resp.content = fake_jpg
 
     with (
-        patch("gemini_act.imobiliare_mcp.maps.available", return_value=True),
-        patch("gemini_act.imobiliare_mcp.maps._key", return_value="dummy_key"),
+        patch("imobiliare.mcp.maps.available", return_value=True),
+        patch("imobiliare.mcp.maps._key", return_value="dummy_key"),
         patch(
-            "gemini_act.imobiliare_mcp.maps.street_view_metadata",
+            "imobiliare.mcp.maps.street_view_metadata",
             return_value={"status": "OK"},
         ),
         patch.object(httpx.Client, "get", return_value=mock_resp),
@@ -200,11 +200,11 @@ def test_street_view_angles():
 def test_analyse_street_no_imagery(tmp_path):
     with (
         patch(
-            "gemini_act.imobiliare_mcp.maps.street_view_metadata",
+            "imobiliare.mcp.maps.street_view_metadata",
             return_value={"status": "ZERO_RESULTS"},
         ),
-        patch("gemini_act.imobiliare_mcp.maps.street_view_angles", return_value={}),
-        patch("gemini_act.imobiliare_mcp.maps.satellite_view", return_value=None),
+        patch("imobiliare.mcp.maps.street_view_angles", return_value={}),
+        patch("imobiliare.mcp.maps.satellite_view", return_value=None),
     ):
         res = viziune_strada.analyse_street_and_surroundings(
             lat=44.4325,
@@ -228,14 +228,14 @@ def test_analyse_street_success(tmp_path):
 
     with (
         patch(
-            "gemini_act.imobiliare_mcp.maps.street_view_metadata",
+            "imobiliare.mcp.maps.street_view_metadata",
             return_value={"status": "OK", "date": "2024-05"},
         ),
         patch(
-            "gemini_act.imobiliare_mcp.maps.street_view_angles",
+            "imobiliare.mcp.maps.street_view_angles",
             return_value={0: fake_jpg, 90: fake_jpg},
         ),
-        patch("gemini_act.imobiliare_mcp.maps.satellite_view", return_value=fake_png),
+        patch("imobiliare.mcp.maps.satellite_view", return_value=fake_png),
     ):
         res = viziune_strada.analyse_street_and_surroundings(
             lat=44.4325,
@@ -260,14 +260,14 @@ def test_analyse_street_gemini_exception(tmp_path):
 
     with (
         patch(
-            "gemini_act.imobiliare_mcp.maps.street_view_metadata",
+            "imobiliare.mcp.maps.street_view_metadata",
             return_value={"status": "OK"},
         ),
         patch(
-            "gemini_act.imobiliare_mcp.maps.street_view_angles",
+            "imobiliare.mcp.maps.street_view_angles",
             return_value={0: fake_jpg},
         ),
-        patch("gemini_act.imobiliare_mcp.maps.satellite_view", return_value=None),
+        patch("imobiliare.mcp.maps.satellite_view", return_value=None),
     ):
         res = viziune_strada.analyse_street_and_surroundings(
             lat=44.4325,
@@ -289,7 +289,7 @@ def test_analyse_street_gemini_exception(tmp_path):
 
 def test_server_tool_with_coordinates():
     with patch(
-        "gemini_act.imobiliare_mcp.viziune_strada.analyse_street_and_surroundings",
+        "imobiliare.mcp.viziune_strada.analyse_street_and_surroundings",
         return_value={"status": "success", "rezumat_markdown": "# Audit"},
     ) as mock_audit:
         res = server.analizeaza_strada_si_imprejurimi_street_view("44.4325, 26.1038")
@@ -307,9 +307,9 @@ def test_server_tool_with_address_geocoding():
     mock_place.formatted_address = "Calea Victoriei, București, România"
 
     with (
-        patch("gemini_act.imobiliare_mcp.maps.geocode", return_value=mock_place),
+        patch("imobiliare.mcp.maps.geocode", return_value=mock_place),
         patch(
-            "gemini_act.imobiliare_mcp.viziune_strada.analyse_street_and_surroundings",
+            "imobiliare.mcp.viziune_strada.analyse_street_and_surroundings",
             return_value={"status": "success", "rezumat_markdown": "# Audit"},
         ) as mock_audit,
     ):
@@ -332,9 +332,9 @@ def test_server_tool_with_listing_id():
     mock_client.hydrate.return_value = mock_raw
 
     with (
-        patch("gemini_act.imobiliare_mcp.server._client") as mock_c_ctx,
+        patch("imobiliare.mcp.server._client") as mock_c_ctx,
         patch(
-            "gemini_act.imobiliare_mcp.viziune_strada.analyse_street_and_surroundings",
+            "imobiliare.mcp.viziune_strada.analyse_street_and_surroundings",
             return_value={"status": "success", "rezumat_markdown": "# Audit"},
         ) as mock_audit,
     ):
@@ -347,7 +347,7 @@ def test_server_tool_with_listing_id():
 
 
 def test_server_tool_unresolved_address():
-    with patch("gemini_act.imobiliare_mcp.maps.geocode", return_value=None):
+    with patch("imobiliare.mcp.maps.geocode", return_value=None):
         res = server.analizeaza_strada_si_imprejurimi_street_view("Adresa Inexistenta 999999")
         assert res["status"] == "error"
         assert "Nu s-au putut determina coordonatele" in res["message"]
@@ -360,7 +360,7 @@ def test_server_tool_unresolved_address():
 
 @pytest.mark.asyncio
 async def test_agent_tool_disabled():
-    with patch("gemini_act.agent.tools.imobiliare.get_settings") as mock_s:
+    with patch("imobiliare.agent_tools.imobiliare.get_settings") as mock_s:
         mock_s.return_value = _settings(imobiliare_enabled=False)
         res = await agent_tools.analizeaza_strada_si_imprejurimi_street_view("Piata Victoriei")
         assert res["status"] == "error"
@@ -370,9 +370,9 @@ async def test_agent_tool_disabled():
 @pytest.mark.asyncio
 async def test_agent_tool_success():
     with (
-        patch("gemini_act.agent.tools.imobiliare.get_settings") as mock_s,
+        patch("imobiliare.agent_tools.imobiliare.get_settings") as mock_s,
         patch(
-            "gemini_act.imobiliare_mcp.server.analizeaza_strada_si_imprejurimi_street_view",
+            "imobiliare.mcp.server.analizeaza_strada_si_imprejurimi_street_view",
             return_value={"status": "success", "rezumat_markdown": "# Street View Audit"},
         ),
     ):
@@ -385,9 +385,9 @@ async def test_agent_tool_success():
 @pytest.mark.asyncio
 async def test_agent_tool_exception():
     with (
-        patch("gemini_act.agent.tools.imobiliare.get_settings") as mock_s,
+        patch("imobiliare.agent_tools.imobiliare.get_settings") as mock_s,
         patch(
-            "gemini_act.imobiliare_mcp.server.analizeaza_strada_si_imprejurimi_street_view",
+            "imobiliare.mcp.server.analizeaza_strada_si_imprejurimi_street_view",
             side_effect=RuntimeError("Connection timeout"),
         ),
     ):

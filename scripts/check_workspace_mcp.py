@@ -1,7 +1,7 @@
 """Smoke-test the Agent Registry MCP wiring without deploying or going through
 Google Chat's OAuth flow.
 
-`adk web` (agents/chat_agent/agent.py) runs in anonymous mode on purpose — no
+`adk web` (src/adk_apps/chat_agent/agent.py) runs in anonymous mode on purpose — no
 Chat user means no per-user Workspace token, so it always skips gmail, drive,
 calendar and people, not just the one you're missing. That is expected and
 tells you nothing about whether Agent Registry resolution actually works.
