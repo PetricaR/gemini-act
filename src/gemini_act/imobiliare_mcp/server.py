@@ -2705,6 +2705,41 @@ def citeste_document_drive(
 
 
 @mcp.tool()
+def intreaba_document_drive(
+    identificator: Annotated[
+        str, Field(description="Numele documentului din listare, calea lui, ori id-ul Drive")
+    ],
+    intrebare: Annotated[
+        str,
+        Field(
+            description=(
+                "Întrebarea pusă documentului, ex. „care e costul pe mp pentru finisaje "
+                "medii în 2026?”"
+            )
+        ),
+    ],
+) -> dict[str, Any]:
+    """Pune o întrebare direct unui document din Drive, cu modelul citind paginile.
+
+    Spre deosebire de `citeste_document_drive`, care întoarce textul extras din
+    fișier, aici documentul e dat modelului ca pagini: vede tabelele ca tabele,
+    graficele, aspectul paginii, și citește inclusiv PDF-uri scanate. Folosește
+    asta când răspunsul stă într-un tabel sau într-o figură, și pentru
+    documentele prea lungi ca să fie transcrise.
+    """
+    try:
+        raspuns = drive_docs.intreaba(identificator, intrebare)
+    except drive_docs.DriveIndisponibil as exc:
+        return {"status": "error", "error_message": str(exc)}
+    return {
+        "status": "success",
+        "intrebare": intrebare,
+        "raspuns": raspuns,
+        "sursa": "citire vizuală a paginilor documentului",
+    }
+
+
+@mcp.tool()
 def cauta_in_documente_drive(
     termen: Annotated[
         str, Field(description="Textul căutat, literal, fără diacritice obligatorii")

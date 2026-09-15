@@ -371,12 +371,35 @@ Listing a folder on a **Shared Drive** needs both `supportsAllDrives` and
 `includeItemsFromAllDrives`. Without them the call succeeds and returns zero
 files — indistinguishable from an empty folder, and it will not raise.
 
-**A scanned PDF must not extract as `""`.** Pages of images with no text layer
-are the normal state of half the documents anyone uploads, and an empty string
-reads downstream as an empty document rather than as a document that needs OCR.
-`_text_pdf` raises with the page count instead. Same rule as the missing-value
-invariant above. `tests/test_drive_docs.py` builds its PDFs with reportlab and
-reads them back with pypdf precisely so this path is exercised for real.
+**`pypdf` is the fast path, not the only one.** It extracts a PDF's *text
+layer*; Gemini needs no such layer — it takes the document as pages and reads
+text, tables, charts and scans the way a person does (50 MB / 1000 pages,
+~258 input tokens per page; on Vertex the inline ceiling is 15 MB, past which
+the file would have to go through a Cloud Storage URI). So there are two ways
+into a document and they are not interchangeable:
+
+* `citeste` extracts text, and falls through to a visual transcription when
+  `_text_pdf` raises `PdfFaraText` — a scan. The transcription carries a header
+  saying it is one: a transcription is not the original, and the rest of this
+  package does not let a derived figure render as a measured one.
+* Images (`png/jpeg/webp/heic`) go down the same road — there is no text layer
+  to extract, so the model is the only reader. The accepted set is listed
+  explicitly rather than taken as `image/*`: a GIF or an SVG would otherwise
+  fail at the API, where the reason is harder to read.
+* `intreaba` never transcribes. The document goes to the model as pages
+  alongside a question. This is the better path whenever the answer lives in a
+  table or a figure — a table flattened to text loses which number belongs to
+  which column — and the *only* one for a document too long to transcribe.
+
+**A scanned PDF must not extract as `""`.** An empty string reads downstream as
+an empty document rather than as one needing to be looked at. Hence
+`PdfFaraText`, which carries the page count, because that is what decides
+between transcribing and refusing: a page is cheap, but a transcription has to
+fit in one answer, and past `MAX_PAGINI_TRANSCRIERE` (30, env-tunable) it
+truncates. A truncated transcription that reads as a whole document is worse
+than a refusal, so past that limit `citeste` refuses and names `intreaba`.
+`tests/test_drive_docs.py` builds its PDFs with reportlab and reads them back
+with pypdf precisely so this path is exercised for real.
 
 The extracted text is cached under `paths.cache_dir("drive")` keyed by the
 file's `modifiedTime`, so a re-upload invalidates its own entry and no TTL can

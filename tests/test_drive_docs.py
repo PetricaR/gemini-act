@@ -170,11 +170,26 @@ def test_pdf_cu_text_este_extras(drive, monkeypatch):
     assert doc.cale == "ghid.pdf"
 
 
-def test_pdf_scanat_se_raporteaza_ca_scanat(drive, monkeypatch):
-    """The failure this module exists for: "" would read as an empty document."""
+def test_pdf_scanat_e_citit_vizual_de_model(drive, monkeypatch):
+    """No text layer is not the end: Gemini reads the pages as images."""
     drive({"radacina": [fisier("scan.pdf")]})
     monkeypatch.setattr(dd, "_descarca", lambda doc: pdf_scanat())
-    with pytest.raises(dd.DriveIndisponibil, match="scanat"):
+    monkeypatch.setattr(
+        dd, "_gemini", lambda date, doc, intrebare: "--- pagina 1 ---\nact de vanzare"
+    )
+    _, text = dd.citeste("scan.pdf", folder="radacina")
+    assert "act de vanzare" in text
+    # The provenance has to travel with it: a transcription is not the original.
+    assert "transcris vizual" in text
+
+
+def test_un_scan_prea_lung_nu_e_transcris_pe_jumatate(drive, monkeypatch):
+    """A truncated transcription reading as a whole document is worse than a refusal."""
+    drive({"radacina": [fisier("scan.pdf")]})
+    monkeypatch.setattr(dd, "_descarca", lambda doc: pdf_scanat())
+    monkeypatch.setattr(dd, "MAX_PAGINI_TRANSCRIERE", 0)
+    monkeypatch.setattr(dd, "_gemini", lambda *a: pytest.fail("nu trebuia apelat"))
+    with pytest.raises(dd.DriveIndisponibil, match="intreaba_document_drive"):
         dd.citeste("scan.pdf", folder="radacina")
 
 
@@ -359,3 +374,108 @@ def test_403_de_api_dezactivat_trimite_la_proiectul_de_cota(monkeypatch):
     mesaj = str(dd._indisponibil(exc, "folderul X"))
     assert "proiectul de cotă" in mesaj
     assert "GOOGLE_CLOUD_PROJECT" in mesaj
+
+
+# -- Asking the document itself --------------------------------------------
+
+
+class _Raspuns2:
+    def __init__(self, text):
+        self.text = text
+
+
+class _FakeModels:
+    def __init__(self, raspuns):
+        self.raspuns = raspuns
+        self.apeluri = []
+
+    def generate_content(self, **kw):
+        self.apeluri.append(kw)
+        return self.raspuns
+
+
+class _FakeClient:
+    def __init__(self, text):
+        self.models = _FakeModels(_Raspuns2(text))
+
+
+@pytest.fixture
+def gemini(monkeypatch):
+    """Install a fake Gemini, returning the client so calls can be inspected."""
+    from gemini_act.imobiliare_mcp import viziune
+
+    def _instaleaza(text):
+        client = _FakeClient(text)
+        monkeypatch.setattr(viziune, "_client", lambda genai, settings: client)
+        return client
+
+    return _instaleaza
+
+
+def test_intreaba_trimite_documentul_ca_pagini(drive, monkeypatch, gemini):
+    drive({"radacina": [fisier("catalog.pdf")]})
+    monkeypatch.setattr(dd, "_descarca", lambda doc: b"%PDF-1.4 ...")
+    client = gemini("420 EUR/mp")
+    assert dd.intreaba("catalog.pdf", "cost finisaje medii?", folder="radacina") == "420 EUR/mp"
+
+    (apel,) = client.models.apeluri
+    parts = apel["contents"][0].parts
+    # The bytes go as a document part, not as text extracted beforehand.
+    assert parts[0].inline_data.mime_type == "application/pdf"
+    assert parts[0].inline_data.data == b"%PDF-1.4 ..."
+    assert "cost finisaje medii?" in parts[1].text
+
+
+def test_un_raspuns_gol_nu_trece_drept_document_gol(drive, monkeypatch, gemini):
+    drive({"radacina": [fisier("catalog.pdf")]})
+    monkeypatch.setattr(dd, "_descarca", lambda doc: b"%PDF-1.4 ...")
+    gemini("")
+    with pytest.raises(dd.DriveIndisponibil, match="răspuns gol"):
+        dd.intreaba("catalog.pdf", "ceva?", folder="radacina")
+
+
+def test_peste_limita_inline_a_vertexului_spune_de_ce(drive, monkeypatch):
+    drive({"radacina": [fisier("urias.pdf", size=str(40 * 1024 * 1024))]})
+    doc = dd.gaseste("urias.pdf", folder="radacina")
+    with pytest.raises(dd.DriveIndisponibil, match="Cloud Storage"):
+        dd._gemini(b"x" * (dd.MAX_INLINE_GEMINI + 1), doc, "ceva?")
+
+
+def test_un_document_google_e_trimis_inapoi_la_citire(drive, monkeypatch):
+    """A Google-native file has no bytes to hand over; its export is the document."""
+    drive({"radacina": [fisier("nota", "application/vnd.google-apps.document")]})
+    monkeypatch.setattr(dd, "_descarca", lambda doc: b"continut exportat")
+    with pytest.raises(dd.DriveIndisponibil, match="citeste_document_drive"):
+        dd.intreaba("nota", "ceva?", folder="radacina")
+
+
+def test_intrebarea_goala_e_refuzata(drive):
+    drive({"radacina": [fisier("catalog.pdf")]})
+    with pytest.raises(dd.DriveIndisponibil, match="goal"):
+        dd.intreaba("catalog.pdf", "   ", folder="radacina")
+
+
+def test_o_imagine_e_citita_vizual(drive, monkeypatch):
+    drive({"radacina": [fisier("plan-cadastral.jpg", "image/jpeg")]})
+    monkeypatch.setattr(dd, "_descarca", lambda doc: b"\xff\xd8\xff")
+    monkeypatch.setattr(dd, "_gemini", lambda date, doc, intrebare: "plan cu 3 camere")
+    doc, text = dd.citeste("plan-cadastral.jpg", folder="radacina")
+    assert doc.tip == "imagine"
+    assert "plan cu 3 camere" in text
+    assert "citit vizual" in text
+
+
+def test_un_gif_nu_e_trimis_ca_imagine(drive):
+    """`image/*` is not the accepted set — a GIF would fail at the API instead."""
+    drive({"radacina": [fisier("animatie.gif", "image/gif")]})
+    with pytest.raises(dd.DriveIndisponibil, match="formatele citite"):
+        dd.citeste("animatie.gif", folder="radacina")
+
+
+def test_intreaba_merge_si_pe_o_imagine(drive, monkeypatch, gemini):
+    drive({"radacina": [fisier("schita.png", "image/png")]})
+    monkeypatch.setattr(dd, "_descarca", lambda doc: b"\x89PNG")
+    client = gemini("2 băi")
+    assert dd.intreaba("schita.png", "câte băi?", folder="radacina") == "2 băi"
+    (apel,) = client.models.apeluri
+    assert apel["contents"][0].parts[0].inline_data.mime_type == "image/png"

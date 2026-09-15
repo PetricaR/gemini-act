@@ -103,11 +103,36 @@ EXPORTURI: dict[str, tuple[str, ...]] = {
     "application/vnd.google-apps.presentation": ("text/plain",),
 }
 
+# What the model will accept as an image. Deliberately not `image/*`: GIF and
+# SVG are not among them, and sending one back fails at the API rather than
+# here, where the reason can be said out loud.
+IMAGINI_GEMINI = (
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+)
+
 _FIELDS = "id,name,mimeType,size,modifiedTime,md5Checksum,shortcutDetails"
 
 
 class DriveIndisponibil(RuntimeError):
     """Drive could not serve the folder or the file — with the reason."""
+
+
+class PdfFaraText(DriveIndisponibil):
+    """A PDF whose pages carry no text layer — a scan.
+
+    Carries the page count because that is what decides what to do next:
+    Gemini can read the pages as images, but a full transcription only fits in
+    one answer for a short document.
+    """
+
+    def __init__(self, cale: str, pagini: int) -> None:
+        self.cale = cale
+        self.pagini = pagini
+        super().__init__(f"„{cale}” are {pagini} pagini fără strat de text — e un PDF scanat.")
 
 
 @dataclass(frozen=True)
@@ -518,6 +543,8 @@ def _extractor_pentru(mime: str, nume: str) -> str | None:
         return "docx"
     if mime.startswith("text/") or mime in ("application/json", "application/xml"):
         return "text"
+    if mime in IMAGINI_GEMINI:
+        return "imagine"
     sufix = nume.rsplit(".", 1)[-1].lower() if "." in nume else ""
     return {
         "pdf": "pdf",
@@ -528,6 +555,12 @@ def _extractor_pentru(mime: str, nume: str) -> str | None:
         "json": "text",
         "xml": "text",
         "html": "text",
+        "png": "imagine",
+        "jpg": "imagine",
+        "jpeg": "imagine",
+        "webp": "imagine",
+        "heic": "imagine",
+        "heif": "imagine",
     }.get(sufix)
 
 
@@ -537,6 +570,7 @@ def _tip_lizibil(mime: str, nume: str) -> str:
         "pdf": "PDF",
         "docx": "Word (.docx)",
         "text": "text",
+        "imagine": "imagine",
     }.get(_extractor_pentru(mime, nume) or "", mime or "necunoscut")
 
 
@@ -594,12 +628,9 @@ def _text_pdf(date: bytes, cale: str) -> str:
     text = "\n\n".join(f"--- pagina {i} ---\n{p}" for i, p in enumerate(pagini, 1) if p)
     if not text.strip():
         # An empty string here would read as an empty document. It is almost
-        # always a scan: pages of images with no text layer, which needs OCR,
-        # not a retry.
-        raise DriveIndisponibil(
-            f"„{cale}” are {len(pagini)} pagini fără strat de text — e un PDF scanat. "
-            "Extragerea textului nu se poate face fără OCR."
-        )
+        # always a scan: pages of images with no text layer. `citeste` catches
+        # this and hands the pages to Gemini, which reads them as images.
+        raise PdfFaraText(cale, len(pagini))
     return text
 
 
@@ -629,6 +660,123 @@ def _text_simplu(date: bytes, cale: str) -> str:
         except UnicodeDecodeError:
             continue
     raise DriveIndisponibil(f"„{cale}” nu este text într-o codare cunoscută.")
+
+
+# -- Gemini reads the pages itself -----------------------------------------
+#
+# `pypdf` extracts a PDF's *text layer*. Gemini does not need one: it takes the
+# document as pages and reads them the way a person does — text, tables,
+# charts, diagrams, and scans with no text layer at all. For the documents this
+# folder holds (cost catalogues, valuation guidance) that difference is not
+# marginal: a table flattened into a line of text loses which number belongs to
+# which column, and a chart disappears entirely.
+#
+# It is used in two places: as the floor under `citeste` when a PDF turns out
+# to be a scan, and as `intreaba`, where the model is asked a question about
+# the document directly and never produces a transcription at all.
+
+# Vertex refuses a document larger than this inline; past it the file has to go
+# through a Cloud Storage URI, which is a deployment decision this module does
+# not get to make on its own.
+MAX_INLINE_GEMINI = 15 * 1024 * 1024
+
+# The model's own ceiling, quoted so the failure names it rather than arriving
+# as an opaque 400.
+MAX_PAGINI_GEMINI = 1000
+
+# How long a scan may be before `citeste` refuses to transcribe it. The binding
+# constraint is the *answer*, not the document: a page costs ~258 input tokens,
+# which is cheap, but a transcription has to fit in one response, and past a
+# few dozen pages it does not — it truncates, and a truncated transcription
+# that reads as a whole document is worse than a refusal. Long documents are
+# what `intreaba` is for: the answer stays short however long the source is.
+MAX_PAGINI_TRANSCRIERE = int(os.environ.get("IMOBILIARE_DRIVE_MAX_PAGINI_OCR") or 30)
+
+TRANSCRIERE = (
+    "Transcrie integral acest document în Markdown, în ordinea paginilor. "
+    "Păstrează tabelele ca tabele Markdown și titlurile ca titluri. Nu rezuma, "
+    "nu comenta, nu adăuga nimic de la tine: doar conținutul documentului. "
+    "Marchează fiecare pagină cu o linie `--- pagina N ---`."
+)
+
+
+TRANSCRIERE_IMAGINE = (
+    "Descrie ce conține această imagine și transcrie integral orice text vizibil "
+    "în ea, păstrând tabelele ca tabele Markdown. Nu rezuma și nu adăuga nimic "
+    "de la tine."
+)
+
+
+def _gemini(date: bytes, doc: Document, intrebare: str) -> str:
+    """Ask Gemini about one document, handing it the file as pages."""
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:  # pragma: no cover - declared dependency
+        raise DriveIndisponibil(
+            "google-genai nu este disponibil, deci documentul nu poate fi citit vizual."
+        ) from exc
+
+    from gemini_act.config import get_settings
+
+    from . import viziune
+
+    if len(date) > MAX_INLINE_GEMINI:
+        raise DriveIndisponibil(
+            f"„{doc.cale}” are {len(date) / 1e6:.0f} MB; Vertex acceptă inline cel mult "
+            f"{MAX_INLINE_GEMINI / 1e6:.0f} MB. Peste atât fișierul trebuie trecut printr-un "
+            "URI de Cloud Storage."
+        )
+
+    settings = get_settings()
+    # Deliberately the same client builder as the visual analysis: it is the one
+    # place that knows this service configures Vertex through `.env` without
+    # exporting it, and solving that twice, differently, is how the two drift.
+    client = viziune._client(genai, settings)
+    parts = [
+        types.Part(inline_data=types.Blob(data=date, mime_type=doc.mime or "application/pdf")),
+        types.Part(text=intrebare),
+    ]
+    try:
+        response = client.models.generate_content(
+            model=settings.imobiliare_vision_model,
+            contents=[types.Content(role="user", parts=parts)],
+            config=types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise DriveIndisponibil(f"Gemini nu a putut citi „{doc.cale}”: {exc}") from exc
+
+    text = (getattr(response, "text", None) or "").strip()
+    if not text:
+        # An empty answer is a refusal or a safety block, not an empty document.
+        raise DriveIndisponibil(
+            f"Gemini a întors un răspuns gol pentru „{doc.cale}” "
+            f"({getattr(response, 'prompt_feedback', None) or 'fără motiv raportat'})."
+        )
+    return text
+
+
+def intreaba(identificator: str | Document, intrebare: str, folder: str | None = None) -> str:
+    """Put a question to the document itself, with the model looking at the pages.
+
+    Better than reading the extracted text and asking the question over it
+    whenever the answer lives in a table, a chart or a layout — and the only
+    thing that works at all on a document too long to transcribe.
+    """
+    if not intrebare.strip():
+        raise DriveIndisponibil("Întrebarea este goală.")
+    doc = identificator if isinstance(identificator, Document) else gaseste(identificator, folder)
+    if _extractor_pentru(doc.mime, doc.nume) == "export":
+        # A Google-native document has no bytes to hand over; its exported text
+        # is the whole document anyway.
+        _, text = citeste(doc, folder)
+        raise DriveIndisponibil(
+            f"„{doc.cale}” este un document Google, nu un fișier — citește-l cu "
+            f"citeste_document_drive ({len(text)} caractere) și răspunde din text."
+        )
+    return _gemini(_descarca(doc), doc, intrebare)
 
 
 # -- Reading, with the cache in front --------------------------------------
@@ -661,12 +809,35 @@ def citeste(identificator: str | Document, folder: str | None = None) -> tuple[D
     if tip is None:
         raise DriveIndisponibil(
             f"„{doc.cale}” este {doc.mime or 'de tip necunoscut'} — formatele citite aici "
-            "sunt PDF, Google Docs/Sheets/Slides, .docx și text (txt/md/csv/json/xml/html)."
+            "sunt PDF, Google Docs/Sheets/Slides, .docx, text (txt/md/csv/json/xml/html) "
+            "și imagini (png/jpeg/webp/heic)."
         )
 
     date = _descarca(doc)
     if tip == "pdf":
-        text = _text_pdf(date, doc.cale)
+        try:
+            text = _text_pdf(date, doc.cale)
+        except PdfFaraText as scan:
+            # No text layer. Gemini can still read the pages as images — within
+            # the length a single transcription can honestly cover.
+            if scan.pagini > MAX_PAGINI_TRANSCRIERE:
+                raise DriveIndisponibil(
+                    f"{scan} Are prea multe pagini ({scan.pagini}) pentru o transcriere "
+                    f"într-un singur răspuns (limita e {MAX_PAGINI_TRANSCRIERE}). Pune o "
+                    "întrebare punctuală despre el cu intreaba_document_drive, care îl "
+                    "citește vizual fără să-l transcrie."
+                ) from scan
+            text = (
+                f"[Document scanat, {scan.pagini} pagini: fără strat de text. "
+                "Textul de mai jos este transcris vizual de model, nu extras din "
+                "fișier — citește-l ca pe o transcriere, nu ca pe original.]\n\n"
+            ) + _gemini(date, doc, TRANSCRIERE)
+    elif tip == "imagine":
+        # An image has no text to extract at all; the model is the only reader.
+        text = (
+            "[Imagine: textul de mai jos este citit vizual de model, nu extras "
+            "dintr-un fișier de text.]\n\n"
+        ) + _gemini(date, doc, TRANSCRIERE_IMAGINE)
     elif tip == "docx":
         text = _text_docx(date, doc.cale)
     else:

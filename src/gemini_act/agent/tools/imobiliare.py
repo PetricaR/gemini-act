@@ -1484,6 +1484,34 @@ async def citeste_document_referinta(
         return _failure("Drive reference document read", exc)
 
 
+async def intreaba_document_referinta(identificator: str, intrebare: str) -> dict[str, Any]:
+    """Pune o întrebare direct unui document de referință din Drive, cu modelul citind paginile.
+
+    Spre deosebire de `citeste_document_referinta`, care întoarce textul extras
+    din fișier, aici documentul ajunge la model ca pagini: vede tabelele ca
+    tabele, graficele și aspectul paginii, și citește inclusiv PDF-uri scanate.
+    Folosește asta când răspunsul stă într-un tabel sau într-o figură, și pentru
+    documentele prea lungi ca să fie transcrise.
+
+    Args:
+        identificator: Numele documentului din listare, calea sau id-ul Drive.
+        intrebare: Întrebarea pusă documentului.
+    """
+    settings = get_settings()
+    if not settings.imobiliare_enabled:
+        return _disabled()
+
+    def work() -> dict[str, Any]:
+        from gemini_act.imobiliare_mcp.server import intreaba_document_drive as server_tool
+
+        return server_tool(identificator=identificator, intrebare=intrebare)
+
+    try:
+        return await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return _failure("Drive reference document question", exc)
+
+
 async def cauta_in_documente_referinta(termen: str) -> dict[str, Any]:
     """Caută un termen în toate documentele de referință din Google Drive.
 
@@ -1536,4 +1564,5 @@ IMOBILIARE_TOOLS = [
     documente_referinta_drive,
     citeste_document_referinta,
     cauta_in_documente_referinta,
+    intreaba_document_referinta,
 ]
