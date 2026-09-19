@@ -22,6 +22,11 @@ os.environ.setdefault("IMOBILIARE_MIN_INTERVAL", "0")
 os.environ.setdefault("IMOBILIARE_JITTER", "0")
 os.environ.setdefault("IMOBILIARE_BACKOFF", "0")
 
+# Assigned, not `setdefault`: a developer with a real bucket in their shell
+# would otherwise have the suite upload test reports to it. `test_storage.py`
+# sets it per-test through monkeypatch, which restores this afterwards.
+os.environ["IMOBILIARE_REPORTS_BUCKET"] = ""
+
 from gemini_act.config import Settings, get_settings  # noqa: E402
 from gemini_act.oauth.store import InMemoryTokenStore, TokenService  # noqa: E402
 from imobiliare.config import Settings as ImobiliareSettings  # noqa: E402

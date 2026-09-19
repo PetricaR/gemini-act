@@ -40,6 +40,11 @@ dependencies = [
     # google-adk[mcp] to drag it in. Pinned to >=1.29 for the `title` and
     # `annotations` arguments to `@mcp.tool` that its whole tool surface uses.
     "mcp>=1.29",
+    # Reports are uploaded to a bucket and handed back as a signed link
+    # (`imobiliare/mcp/storage.py`): on Cloud Run the local path is /tmp on one
+    # instance, which an MCP client in another process cannot open. Present
+    # transitively via google-adk[gcp], declared because this package imports it.
+    "google-cloud-storage>=3.0",
 ]
 
 [project.scripts]

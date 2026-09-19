@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from imobiliare.api import imagery
 from imobiliare.api.demo_data import DEMO_AUDIT_DATA
-from imobiliare.mcp import generator_pdf, paths, server
+from imobiliare.mcp import generator_pdf, paths, server, storage
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,28 @@ async def get_demo_audit() -> dict[str, Any]:
     }
 
 
+def _link_pdf(pdf_path: str, listing_id: str | None = None, known: str | None = None) -> str:
+    """The best link to a rendered PDF that this deployment can offer.
+
+    A signed bucket link when there is one, `/api/audit/pdf/<name>` otherwise.
+    The fallback reads local disk, which on Cloud Run is one instance's `/tmp`:
+    a download served by a *different* instance than the one that rendered the
+    file is a 404, and so is one served after that instance recycled. So the
+    bucket link is preferred whenever it exists, and the local route stays only
+    for deployments with no bucket configured.
+
+    Either is just an href to the React UI, so this changes nothing there.
+    """
+    if known:
+        return known
+    if pdf_path and storage.enabled():
+        stored = storage.upload(Path(pdf_path), listing_id)
+        if stored and stored.url:
+            return stored.url
+    name = Path(pdf_path).name if pdf_path else ""
+    return f"/api/audit/pdf/{name}" if name else ""
+
+
 @router.post("/generate")
 async def generate_audit_report(request: AuditRequest) -> dict[str, Any]:
     """Generează raportul complet de audit și fișierul PDF oficial."""
@@ -112,8 +134,7 @@ async def generate_audit_report(request: AuditRequest) -> dict[str, Any]:
         demo_copy = _completeaza(_with_location(dict(DEMO_AUDIT_DATA)))
         # Generare PDF din datele demo
         pdf_path = generator_pdf.genereaza_raport_complet_pdf(demo_copy)
-        filename = Path(pdf_path).name
-        pdf_url = f"/api/audit/pdf/{filename}"
+        pdf_url = _link_pdf(pdf_path, str(demo_copy.get("id") or "demo"))
         return {
             "status": "success",
             "data": demo_copy,
@@ -130,14 +151,18 @@ async def generate_audit_report(request: AuditRequest) -> dict[str, Any]:
             adresa_sau_identificator=query,
         )
         pdf_path = result.get("cale_pdf", "")
-        filename = Path(pdf_path).name if pdf_path else ""
         date_audit = result.get("date_audit") or {
             "id": result.get("proprietate_id"),
             "titlu": result.get("titlu"),
             "adresa": query,
         }
         date_audit = _completeaza(_with_location(date_audit))
-        pdf_url = f"/api/audit/pdf/{filename}" if filename else ""
+        # `server.genereaza_raport_complet_pdf` has already uploaded it and
+        # returned the link; passing it through avoids a second upload of the
+        # same bytes under a second object name.
+        pdf_url = _link_pdf(
+            pdf_path, str(result.get("proprietate_id") or ""), known=result.get("pdf_url")
+        )
 
         return {
             "status": "success",

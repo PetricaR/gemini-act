@@ -32,6 +32,7 @@ from . import (
     maps,
     negociere,
     paths,
+    storage,
     storia,
     viziune,
 )
@@ -1383,8 +1384,14 @@ def evaluare(
     path.write_text(markdown, encoding="utf-8")
 
     ask, final = subject.get("price_eur"), valuation.final_value
+    # The local path is where it was staged; the link is how anyone else
+    # reaches it. Both are returned — see `storage.py` for why the upload can
+    # never take the valuation down with it.
+    legatura: dict[str, Any] = {}
+    storage.attach(legatura, path, listing_id, key="raport")
     return {
         "raport": str(path),
+        **legatura,
         "id": listing_id,
         "titlu": subject.get("title"),
         "url": subject.get("url"),
@@ -2699,16 +2706,24 @@ def genereaza_raport_complet_pdf(
         cale_iesire=cale_salvare,
     )
 
+    legatura: dict[str, Any] = {}
+    storage.attach(
+        legatura, Path(cale_finala), str(date_proprietate.get("id") or ""), key="pdf"
+    )
+    # The link is what a caller can open; the path is only meaningful on the
+    # machine that rendered it, which on Cloud Run stops existing shortly.
+    unde = legatura.get("pdf_url") or cale_finala
     return {
         "status": "success",
         "cale_pdf": cale_finala,
+        **legatura,
         "proprietate_id": date_proprietate.get("id"),
         "titlu": date_proprietate.get("titlu"),
         "date_audit": date_proprietate,
-        "mesaj": f"Raportul complet a fost compilat și exportat în: {cale_finala}",
+        "mesaj": f"Raportul complet a fost compilat și exportat în: {unde}",
         "rezumat_markdown": (
             f"### 📄 Raport de Evaluare și Audit Imobiliar Generat cu Succes\n\n"
-            f"- **Fișier PDF:** `{cale_finala}`\n"
+            f"- **Fișier PDF:** {f'[Descarcă raportul]({unde})' if legatura.get('pdf_url') else f'`{cale_finala}`'}\n"
             f"- **Standard de Prezentare:** Ghidul Oficial de Tehnoredactare Google Docs\n"
             f"- **Secțiuni Incluse:** Fișă tehnică, Evaluare ANEVAR (GEV 630), Audit Vizual "
             f"Mobilier & Finisaje, Inspecție Fațadă & Stradă 360° Google Street View, "

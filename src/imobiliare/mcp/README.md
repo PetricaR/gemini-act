@@ -147,7 +147,10 @@ register all work. Each variable below buys back one capability.
 | `GEMINI_ACT_IMOBILIARE_COMPARABLES` | Comparables carried into the GEV 630 grid (default 12). |
 | `GEMINI_ACT_IMOBILIARE_MAX_PHOTOS` | Photographs sent to the vision model per listing (default 24). |
 | `GEMINI_ACT_IMOBILIARE_VISION_ENABLED`, `GEMINI_ACT_IMOBILIARE_VISION_MODEL` | Turn the vision passes off, or pin the model. |
-| `IMOBILIARE_CACHE_DIR`, `IMOBILIARE_REPORTS_DIR` | Where the sitemap/geo caches and the generated reports go. |
+| `IMOBILIARE_CACHE_DIR`, `IMOBILIARE_REPORTS_DIR` | Where the sitemap/geo caches and the generated reports are *staged* on local disk. |
+| `IMOBILIARE_REPORTS_BUCKET` | Uploads each generated report to this GCS bucket and returns a signed link (see below). Unset — the default — keeps reports on local disk only. |
+| `IMOBILIARE_REPORTS_URL_TTL_DAYS` | How long a report link stays valid (default and maximum 7 — a V4 signed URL cannot outlive that). |
+| `IMOBILIARE_REPORTS_PREFIX` | Folder inside the bucket (default `rapoarte`). |
 | `IMOBILIARE_MCP_TOKEN`, `IMOBILIARE_MCP_HOSTS` | Read by the deployed HTTP service only, not by this command. |
 
 See [`../config.py`](../config.py) for the reasoning behind each default.
@@ -163,6 +166,25 @@ server-side and reach the caller as type and message only.
 
 **Results are structured.** Every tool publishes an `outputSchema` and returns
 `structuredContent` alongside the text.
+
+**Reports come back as links, not paths.** `imobiliare_appraise_property` and
+`imobiliare_generate_pdf_report` write a file, and a local path is useless to a client in
+another process — on Cloud Run it is `/tmp` on one instance, gone when that instance
+recycles. With `IMOBILIARE_REPORTS_BUCKET` set, each report is uploaded and the result
+carries `raport_url` / `pdf_url`: a **V4 signed URL** that opens without a Google account
+and expires (7 days by default). The `gs://` URI and the local path come back too.
+
+The bucket is created private with public-access prevention, and each run writes a new
+object rather than overwriting — a link already handed to someone must keep resolving to
+what it resolved to. `deploy/setup_gcp.sh` creates the bucket, grants the runtime account
+`roles/storage.objectAdmin` **on that bucket only**, and sets a 365-day lifecycle rule.
+
+Signing needs no private key: the runtime account signs through the IAM `signBlob` API
+using `roles/iam.serviceAccountTokenCreator` on itself, which the setup script already
+grants. Locally, ADC is usually a *user* account and cannot sign at all — the upload still
+happens and the result carries the `gs://` URI plus a note saying why there is no link.
+**None of this can fail a valuation:** an upload that goes wrong is a note beside a report
+that still exists on disk.
 
 **Nothing blocks the server.** The tool bodies are synchronous and an appraisal spends
 minutes in them, so each call runs on a worker thread. One long valuation does not stall

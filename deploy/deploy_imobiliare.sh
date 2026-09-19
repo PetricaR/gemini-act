@@ -22,6 +22,10 @@ REGION="${CLOUD_RUN_REGION:-europe-west1}"
 VERTEX_LOCATION="${GOOGLE_CLOUD_LOCATION:-global}"
 SERVICE="${IMOBILIARE_SERVICE_NAME:-imobiliare}"
 SA_EMAIL="${SERVICE_ACCOUNT_NAME:-gemini-act-runtime}@${PROJECT}.iam.gserviceaccount.com"
+# Where generated reports are kept. /tmp on Cloud Run is instance-local and in
+# memory, so without a bucket a report exists only for the request that made it
+# and no MCP client can ever open it. `deploy/setup_gcp.sh` creates this bucket.
+REPORTS_BUCKET="${IMOBILIARE_REPORTS_BUCKET:-${PROJECT}-imobiliare-rapoarte}"
 
 # Fails closed rather than publishing 28 money-spending tools to the internet.
 # The middleware in `imobiliare/app.py` refuses /mcp with 503 when this is
@@ -57,7 +61,7 @@ gcloud run deploy "${SERVICE}" \
   --timeout=900 \
   --no-cpu-throttling \
   --min-instances="${IMOBILIARE_MIN_INSTANCES:-0}" \
-  --set-env-vars="^##^GOOGLE_CLOUD_PROJECT=${PROJECT}##GOOGLE_CLOUD_LOCATION=${VERTEX_LOCATION}##GOOGLE_GENAI_USE_VERTEXAI=TRUE##GOOGLE_API_USE_CLIENT_CERTIFICATE=false##IMOBILIARE_MCP_TOKEN=${IMOBILIARE_MCP_TOKEN:-}##IMOBILIARE_DRIVE_FOLDER_ID=${IMOBILIARE_DRIVE_FOLDER_ID:-}##IMOBILIARE_DRIVE_MAX_PAGINI_OCR=${IMOBILIARE_DRIVE_MAX_PAGINI_OCR:-30}##IMOBILIARE_REPORTS_DIR=${IMOBILIARE_REPORTS_DIR:-/tmp/imobiliare-rapoarte}##IMOBILIARE_CACHE_DIR=/tmp/imobiliare-cache##GEMINI_ACT_MAPS_API_KEY=${GEMINI_ACT_MAPS_API_KEY:-}##GEMINI_ACT_IMOBILIARE_SESSION_ID=${GEMINI_ACT_IMOBILIARE_SESSION_ID:-}##GEMINI_API_KEY=${GEMINI_API_KEY:-}" \
+  --set-env-vars="^##^GOOGLE_CLOUD_PROJECT=${PROJECT}##GOOGLE_CLOUD_LOCATION=${VERTEX_LOCATION}##GOOGLE_GENAI_USE_VERTEXAI=TRUE##GOOGLE_API_USE_CLIENT_CERTIFICATE=false##IMOBILIARE_MCP_TOKEN=${IMOBILIARE_MCP_TOKEN:-}##IMOBILIARE_DRIVE_FOLDER_ID=${IMOBILIARE_DRIVE_FOLDER_ID:-}##IMOBILIARE_DRIVE_MAX_PAGINI_OCR=${IMOBILIARE_DRIVE_MAX_PAGINI_OCR:-30}##IMOBILIARE_REPORTS_DIR=${IMOBILIARE_REPORTS_DIR:-/tmp/imobiliare-rapoarte}##IMOBILIARE_CACHE_DIR=/tmp/imobiliare-cache##IMOBILIARE_REPORTS_BUCKET=${REPORTS_BUCKET}##IMOBILIARE_REPORTS_URL_TTL_DAYS=${IMOBILIARE_REPORTS_URL_TTL_DAYS:-7}##GEMINI_ACT_MAPS_API_KEY=${GEMINI_ACT_MAPS_API_KEY:-}##GEMINI_ACT_IMOBILIARE_SESSION_ID=${GEMINI_ACT_IMOBILIARE_SESSION_ID:-}##GEMINI_API_KEY=${GEMINI_API_KEY:-}" \
   --quiet
 
 URL="$(gcloud run services describe "${SERVICE}" \
@@ -75,6 +79,7 @@ cat <<EOF
     Report UI : ${URL}
     Report API: ${URL}/api/audit/demo
     MCP       : ${URL}/mcp   (Authorization: Bearer \$IMOBILIARE_MCP_TOKEN)
+    Reports   : gs://${REPORTS_BUCKET}  (returned as signed links, ${IMOBILIARE_REPORTS_URL_TTL_DAYS:-7}d)
 
     Point an external MCP client at ${URL}/mcp with that bearer token.
     The Chat agent is unchanged and still calls the valuation in process.

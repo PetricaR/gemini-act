@@ -10,6 +10,7 @@ src/imobiliare/mcp/
   app.py      the MCP server object, the annotation vocabulary, the error guard
   cli.py      the `imobiliare-mcp` command: transports, flags, --list-tools
   server.py   the 28 tools + the shared Filters model
+  storage.py  reports -> GCS bucket -> signed link; off unless a bucket is set
   client.py   HTTP against the two upstream hosts; session handling
   imo360.py   the second source: session-free, geographic, carries rentals
   imoradar.py the third source: an aggregator over every major RO portal

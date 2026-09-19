@@ -86,18 +86,60 @@ done
 # through the IAM Credentials API instead, and that needs the account to be a
 # token creator on itself. Without this the deployed service fails at Drive with
 # 403 insufficientPermissions while a developer machine works fine.
-echo "==> Self-impersonation (Drive scope for the runtime account)"
+# Where generated reports live. On Cloud Run the only writable filesystem is
+# /tmp, which is instance-local and in memory, so a report written there is
+# gone when the instance recycles and is unreachable by an MCP client in
+# another process anyway. The bucket is uniform-access and *not* public: the
+# service hands out per-object V4 signed URLs that expire (see
+# `src/imobiliare/mcp/storage.py`), because a valuation carries an address, an
+# asking price and a walk-away figure.
+REPORTS_BUCKET="${IMOBILIARE_REPORTS_BUCKET:-${PROJECT}-imobiliare-rapoarte}"
+echo "==> Reports bucket gs://${REPORTS_BUCKET}"
+if ! gcloud storage buckets describe "gs://${REPORTS_BUCKET}" >/dev/null 2>&1; then
+  gcloud storage buckets create "gs://${REPORTS_BUCKET}" \
+    --project="${PROJECT}" \
+    --location="${REGION}" \
+    --uniform-bucket-level-access \
+    --public-access-prevention
+  echo "    created"
+else
+  echo "    already exists"
+fi
+
+# objectAdmin on the bucket alone, not project-wide storage access: this
+# service writes reports and reads nothing else.
+gcloud storage buckets add-iam-policy-binding "gs://${REPORTS_BUCKET}" \
+  --member="serviceAccount:${SA_EMAIL}" \
+  --role="roles/storage.objectAdmin" >/dev/null
+echo "    roles/storage.objectAdmin for ${SA_EMAIL}"
+
+# A lifecycle rule rather than a cron: reports are regenerable from the listing
+# id, and a signed link is capped at 7 days anyway, so keeping them for a year
+# is the outer bound of useful rather than a retention policy.
+LIFECYCLE="$(mktemp)"
+cat > "${LIFECYCLE}" <<'JSON'
+{"rule": [{"action": {"type": "Delete"}, "condition": {"age": 365}}]}
+JSON
+gcloud storage buckets update "gs://${REPORTS_BUCKET}" --lifecycle-file="${LIFECYCLE}" >/dev/null
+rm -f "${LIFECYCLE}"
+echo "    lifecycle: delete after 365 days"
+
+echo "==> Self-impersonation (Drive scope, and signing report URLs)"
 gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
   --member="serviceAccount:${SA_EMAIL}" \
   --role="roles/iam.serviceAccountTokenCreator" \
   --condition=None >/dev/null
 echo "    roles/iam.serviceAccountTokenCreator on itself"
+# The same binding is what lets the runtime account sign report URLs: its
+# metadata-server credentials carry no private key, so `generate_signed_url`
+# goes through the IAM signBlob API. See `src/imobiliare/mcp/storage.py`.
 
 cat <<EOF
 
 ==> Setup complete.
 
 Service account: ${SA_EMAIL}
+Reports bucket : gs://${REPORTS_BUCKET}
 
 Still to do by hand (see README.md):
   1. OAuth consent screen + Web client, redirect URI:

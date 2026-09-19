@@ -470,6 +470,12 @@ async def evalueaza_proprietate(
         answer with the attachment marker and the JSON
         {"artifactId": "<that token>"}; do not try to reproduce the report text
         yourself. On error an "error_message".
+
+        When a reports bucket is configured the dict also carries "raport_url",
+        a link to the same report that expires (7 days). Give the user both:
+        the attachment is what they read now, the link is what they can share
+        or come back to. Quote the link as-is; it is signed, so altering it
+        breaks it.
     """
     settings = get_settings()
     if not settings.imobiliare_enabled:
