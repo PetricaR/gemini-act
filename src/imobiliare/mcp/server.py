@@ -1,6 +1,13 @@
-"""MCP server exposing imobiliare.ro's AI property search.
+"""The tools `imobiliare_mcp` publishes.
 
-Run with:  imobiliare-mcp     (or: python -m imobiliare_mcp.server)
+Run the server with `imobiliare-mcp` (see `cli.py` for transports and flags).
+The server object itself, the annotation vocabulary and the failure handling
+live in `app.py`; this module is the tool surface and nothing else.
+
+Each tool carries two names on purpose — `imobiliare_search_listings` on the
+wire, `cauta` in Python — and `app.tool` is where they meet. See `app.py` for
+why, and for why the decorator hands the plain function back rather than a
+wrapper.
 """
 
 from __future__ import annotations
@@ -13,19 +20,6 @@ import statistics
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-# The class was renamed between MCP SDK majors: `FastMCP` on 1.x,
-# `MCPServer` on 2.x. This package was written against 2.x, but google-adk
-# pins 1.x, and both are in the wild — so accept either rather than forcing a
-# resolution that would fight the ADK dependency.
-#
-# What matters for `agent/tools/imobiliare.py` is unaffected by the rename:
-# on both SDKs `@mcp.tool()` returns the *plain function*, so every tool below
-# stays directly callable as itself and does not need unwrapping. (Verified on
-# 1.29.0; older 1.x wrapped it in an object exposing `.fn`.)
-try:
-    from mcp.server.mcpserver import MCPServer
-except ImportError:  # pragma: no cover - depends on which SDK major is installed
-    from mcp.server.fastmcp import FastMCP as MCPServer
 from pydantic import BaseModel, Field
 
 from . import (
@@ -38,9 +32,11 @@ from . import (
     maps,
     negociere,
     paths,
+    storia,
     viziune,
 )
 from .anevar import Params, dedupe, evaluate, is_furnished
+from .app import local, mcp, read_only, tool, writes
 from .client import ImobiliareClient, SessionError
 from .galerie import contact_sheet
 from .parse import filter_and_rank, normalise
@@ -48,7 +44,9 @@ from .raport import render
 
 logger = logging.getLogger(__name__)
 
-mcp = MCPServer("imobiliare")
+# Re-exported so `from imobiliare.mcp.server import mcp` keeps working for
+# anything pointed at this module as the server's entry point.
+__all__ = ["Filters", "main", "mcp"]
 
 SellerType = Literal["agency", "individual", "developer"]
 SortBy = Literal[
@@ -173,7 +171,10 @@ def _apply(records, filters, sort, limit):
     return matches, [dict(r) for r in matches[:limit]]
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_search_listings_headless",
+    annotations=read_only("Search imobiliare.ro without a session"),
+)
 def cauta_obscura(
     query: Annotated[
         str,
@@ -194,7 +195,10 @@ def cauta_obscura(
     return search_imobiliare_obscura(query=query, filters=filtre, sort=sort, limit=limit)
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_search_listings",
+    annotations=read_only("Search imobiliare.ro"),
+)
 def cauta(
     query: Annotated[
         str,
@@ -253,7 +257,10 @@ def cauta(
     }
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_resume_search",
+    annotations=read_only("Re-filter an earlier search"),
+)
 def reia(
     token: Annotated[str, Field(description="A resume_token from an earlier cauta() call")],
     filtre: Filters | None = None,
@@ -284,7 +291,10 @@ def reia(
     }
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_get_listings",
+    annotations=read_only("Get listings by id"),
+)
 def detalii(
     ids: Annotated[
         list[str],
@@ -299,7 +309,10 @@ def detalii(
     return {"count": len(listings), "listings": [normalise(listing) for listing in listings]}
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_get_market_stats",
+    annotations=read_only("Market statistics for a result set"),
+)
 def statistici(
     token: Annotated[str, Field(description="A resume_token from an earlier cauta() call")],
     filtre: Filters | None = None,
@@ -359,7 +372,10 @@ def statistici(
     }
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_create_session",
+    annotations=writes("Mint a search session", idempotent=False),
+)
 def sesiune_noua() -> dict[str, Any]:
     """Mint a fresh session id from the AI host.
 
@@ -400,7 +416,10 @@ def _imo360_geo(
     )
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_search_imo360",
+    annotations=read_only("Search imo360 by area"),
+)
 def cauta_imo360(
     zona: Annotated[
         str,
@@ -503,7 +522,10 @@ def cauta_imo360(
     }
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_get_market_pulse",
+    annotations=read_only("Sale, rent and gross yield for a zone"),
+)
 def puls_piata(
     zona: Annotated[str, Field(description="Neighbourhood or zone name, e.g. 'Titan'")],
     oras: Annotated[
@@ -558,7 +580,10 @@ def puls_piata(
     }
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_get_imo360_listing",
+    annotations=read_only("Get an imo360 listing"),
+)
 def detalii_imo360(
     id_anunt: Annotated[str, Field(description="An imo360 listing id, from a cauta_imo360 result")],
 ) -> dict[str, Any]:
@@ -604,7 +629,10 @@ def _imo360_attributes(raw: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_search_imoradar",
+    annotations=read_only("Search every Romanian portal at once"),
+)
 def cauta_imoradar(
     zona: Annotated[
         str | None,
@@ -729,7 +757,10 @@ def cauta_imoradar(
     }
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_get_price_history",
+    annotations=read_only("Asking-price history for a listing"),
+)
 def istoric_pret_imoradar(
     id_anunt: Annotated[
         str, Field(description="An imoradar24 listing id, from a cauta_imoradar result")
@@ -864,6 +895,19 @@ class ParametriEvaluare(BaseModel):
 
 
 _ID_IN_URL = re.compile(r"(\d{6,})\s*/?$")
+
+
+def _anunt_storia(identificator: str) -> tuple[str, list[dict[str, Any]] | None]:
+    """(id, [anunț]) pentru un link storia.ro; (id imobiliare.ro, None) altfel.
+
+    Există ca dispecerat într-un singur loc: cine primește un identificator nu
+    trebuie să știe de pe ce portal vine, iar conducta de mai jos lucrează pe
+    aceeași formă de înregistrare indiferent de sursă.
+    """
+    if not storia.este_url_storia(identificator):
+        return _resolve_id(identificator), None
+    inregistrare = storia.detalii(identificator)
+    return str(inregistrare.get("id") or storia.id_din_url(identificator) or ""), [inregistrare]
 
 
 def _resolve_id(identificator: str) -> str:
@@ -1118,7 +1162,10 @@ def _reports_dir() -> Path:
     return paths.reports_dir()
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_appraise_property",
+    annotations=writes("Appraise a property (SEV 2025)", destructive=True),
+)
 def evaluare(
     identificator: Annotated[
         str, Field(description="Listing id or full imobiliare.ro offer URL, e.g. '275807510'")
@@ -1410,7 +1457,10 @@ def evaluare(
     }
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_plan_negotiation",
+    annotations=read_only("Plan an offer and a walk-away"),
+)
 def strategie_negociere(
     identificator: Annotated[str, Field(description="Listing id or full imobiliare.ro offer URL")],
     buget_total_max: Annotated[
@@ -1508,7 +1558,10 @@ def strategie_negociere(
     }
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_inspect_photos",
+    annotations=read_only("Ask a question of the listing photos"),
+)
 def inspecteaza_poze(
     identificator: Annotated[str, Field(description="Listing ID or imobiliare.ro URL")],
     intrebare: Annotated[str, Field(description="Question about the property's photos")],
@@ -1534,7 +1587,10 @@ def inspecteaza_poze(
     return viziune.inspect(subject, intrebare)
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_analyze_furnishings",
+    annotations=read_only("Audit furniture and finishes from photos"),
+)
 def analizeaza_mobilier_si_finisaje(
     identificator: Annotated[str, Field(description="Listing ID or imobiliare.ro URL")],
     limita_fotografii: Annotated[
@@ -1564,7 +1620,10 @@ def analizeaza_mobilier_si_finisaje(
     )
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_analyze_developer",
+    annotations=read_only("Audit the developer and the contractor"),
+)
 def analizeaza_dezvoltator_si_constructor(
     identificator_sau_nume: Annotated[
         str,
@@ -1601,7 +1660,10 @@ def analizeaza_dezvoltator_si_constructor(
     )
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_analyze_build_materials",
+    annotations=read_only("Audit construction materials and specs"),
+)
 def analizeaza_materiale_si_specificatii_tehnice(
     identificator_sau_nume: Annotated[
         str,
@@ -1640,7 +1702,10 @@ def analizeaza_materiale_si_specificatii_tehnice(
     )
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_build_handover_checklist",
+    annotations=local("Handover checklist for a new build"),
+)
 def checklist_receptie_imobil_nou(
     etapa: Annotated[
         str,
@@ -1668,7 +1733,10 @@ def checklist_receptie_imobil_nou(
     )
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_analyze_street_view",
+    annotations=read_only("Audit the street from Street View"),
+)
 def analizeaza_strada_si_imprejurimi_street_view(
     adresa_sau_identificator: Annotated[
         str,
@@ -1763,7 +1831,10 @@ def analizeaza_strada_si_imprejurimi_street_view(
     )
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_check_developer_solvency",
+    annotations=read_only("Check a developer's financial standing"),
+)
 def analizeaza_bonitate_dezvoltator_targetare(
     cui_sau_nume: Annotated[
         str,
@@ -1787,7 +1858,10 @@ def analizeaza_bonitate_dezvoltator_targetare(
     return targetare.analizeaza_firma_targetare(cui_sau_nume)
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_get_maps_reviews",
+    annotations=read_only("Google Maps reviews for a place"),
+)
 def recenzii_reputatie_google_maps(
     nume_sau_adresa_sau_place_id: Annotated[
         str,
@@ -1810,7 +1884,10 @@ def recenzii_reputatie_google_maps(
     return recenzii_maps.obtine_si_analizeaza_recenzii(nume_sau_adresa_sau_place_id)
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_analyze_defects",
+    annotations=read_only("Audit appliances and finish defects"),
+)
 def analizeaza_electrocasnice_si_defecte_finisaje(
     identificator_proprietate: Annotated[
         str,
@@ -1854,7 +1931,10 @@ def analizeaza_electrocasnice_si_defecte_finisaje(
     )
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_check_seismic_risk",
+    annotations=read_only("Check the seismic-risk register"),
+)
 def verifica_risc_seismic(
     adresa_sau_identificator: Annotated[
         str,
@@ -2185,7 +2265,10 @@ def _puncte_forte_slabe(
     return [x for x in forte if x], [x for x in slabe if x]
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_generate_pdf_report",
+    annotations=writes("Compile the full PDF dossier", destructive=True),
+)
 def genereaza_raport_complet_pdf(
     adresa_sau_identificator: Annotated[
         str,
@@ -2234,12 +2317,16 @@ def genereaza_raport_complet_pdf(
 
     sub: dict[str, Any] | None = None
     try:
-        lid = _resolve_id(adresa_sau_identificator)
+        # storia.ro publică tot anunțul în pagină, deci nu trece prin `hydrate`:
+        # `storia.detalii` întoarce deja forma pe care o produce `normalise`, așa
+        # că aici e și înregistrarea brută, și cea normalizată. Restul blocului
+        # citește ambele prin `.get`, deci nu-l interesează de unde a venit.
+        lid, raw_storia = _anunt_storia(adresa_sau_identificator)
         with _client() as client:
-            raw = client.hydrate([lid])
+            raw = raw_storia or client.hydrate([lid])
             if raw:
                 r_item = raw[0]
-                sub = normalise(r_item)
+                sub = r_item if raw_storia else normalise(r_item)
                 date_proprietate["id"] = str(lid)
                 titlu_str = sub.get("title") or r_item.get("heading") or f"Apartament {lid}"
                 date_proprietate["titlu"] = titlu_str
@@ -2638,7 +2725,10 @@ def genereaza_raport_complet_pdf(
 # `drive_docs` explică de ce un folder nepartajat raportează 404 și nu 403.
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_list_documents",
+    annotations=read_only("List the reference documents"),
+)
 def documente_drive(
     reincarca: Annotated[
         bool, Field(description="Ignoră listarea din cache și interoghează Drive din nou")
@@ -2663,7 +2753,10 @@ def documente_drive(
     }
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_read_document",
+    annotations=read_only("Read a reference document"),
+)
 def citeste_document_drive(
     identificator: Annotated[
         str,
@@ -2704,7 +2797,10 @@ def citeste_document_drive(
     }
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_ask_document",
+    annotations=read_only("Ask a question of a document"),
+)
 def intreaba_document_drive(
     identificator: Annotated[
         str, Field(description="Numele documentului din listare, calea lui, ori id-ul Drive")
@@ -2739,7 +2835,10 @@ def intreaba_document_drive(
     }
 
 
-@mcp.tool()
+@tool(
+    name="imobiliare_search_documents",
+    annotations=read_only("Search the reference documents"),
+)
 def cauta_in_documente_drive(
     termen: Annotated[
         str, Field(description="Textul căutat, literal, fără diacritice obligatorii")
@@ -2767,7 +2866,14 @@ def cauta_in_documente_drive(
 
 
 def main() -> None:
-    mcp.run()
+    """Kept so `imobiliare.mcp.server:main` stays a working entry point.
+
+    The command itself lives in `cli.py`, which is what `imobiliare-mcp`
+    resolves to; this only forwards to it.
+    """
+    from .cli import main as cli_main
+
+    cli_main()
 
 
 if __name__ == "__main__":

@@ -54,10 +54,16 @@ export default function SearchHero({ onSearch, onDemo, loading, currentStep }) {
           </span>
         </h1>
 
-        <p className="mx-auto mb-8 max-w-2xl text-sm leading-relaxed text-slate-600 sm:text-base">
-          Introdu link-ul anunțului sau adresa. Agentul scanează finisajele, detectează defectele,
-          verifică prețul față de standardul ANEVAR, evaluează electrocasnicele pe magazinele online
-          și verifică solvența dezvoltatorului.
+        <p className="mx-auto mb-3 max-w-2xl text-base leading-relaxed text-slate-600">
+          Copiază linkul anunțului de pe <strong className="text-slate-800">imobiliare.ro</strong> sau{' '}
+          <strong className="text-slate-800">storia.ro</strong> și primești un dosar de audit în PDF:
+          evaluare după standardul ANEVAR cu comparabile din piață, defectele vizibile în fotografii,
+          riscul seismic al clădirii și situația financiară a dezvoltatorului.
+        </p>
+
+        <p className="mx-auto mb-8 max-w-2xl text-sm text-slate-500">
+          Durează 2–4 minute — analiza chiar se uită la fiecare fotografie. Nu ai un anunț la îndemână?
+          Pornește de la exemplul de mai jos.
         </p>
 
         <form onSubmit={handleSubmit} className="mx-auto mb-5 max-w-3xl">
@@ -71,7 +77,7 @@ export default function SearchHero({ onSearch, onDemo, loading, currentStep }) {
                 type="text"
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
-                placeholder="Link anunț (https://www.imobiliare.ro/oferta/…) sau ID ofertă"
+                placeholder="Lipește linkul anunțului — imobiliare.ro sau storia.ro"
                 className="w-full bg-transparent py-2 text-sm text-slate-900 placeholder-slate-400 focus:outline-none"
                 disabled={loading}
               />
@@ -115,25 +121,40 @@ export default function SearchHero({ onSearch, onDemo, loading, currentStep }) {
         </form>
 
         <div className="flex flex-wrap items-center justify-center gap-2 text-xs">
-          <span className="font-medium text-slate-500">Exemple rapide:</span>
+          <span className="font-medium text-slate-500">Încearcă pe un anunț real:</span>
           <button
             type="button"
             onClick={handleQuickDemo}
             className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-slate-600
                        transition-colors hover:border-slate-300 hover:text-slate-900"
           >
-            🏢 Penthouse Aviatiei Park
+            ⚡ Raport demonstrativ (instant)
           </button>
           <button
             type="button"
             onClick={() => {
-              setUrl('https://www.imobiliare.ro/oferta/floreasca-3-camere-lux');
-              onSearch('floreasca-3-camere-lux');
+              const link =
+                'https://www.storia.ro/ro/oferta/3-camere-2-minute-metrou-dristor-renovat-sector-3-IDIxfT';
+              setUrl(link);
+              onSearch(link);
             }}
             className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-slate-600
                        transition-colors hover:border-slate-300 hover:text-slate-900"
           >
-            🏙️ Floreasca 3 camere lux
+            🏙️ storia.ro — 3 camere, Dristor
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const link =
+                'https://www.imobiliare.ro/oferta/apartament-de-vanzare-sector-4-tineretului-3-camere-275705586';
+              setUrl(link);
+              onSearch(link);
+            }}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-slate-600
+                       transition-colors hover:border-slate-300 hover:text-slate-900"
+          >
+            🏢 imobiliare.ro — 3 camere, Tineretului
           </button>
         </div>
 

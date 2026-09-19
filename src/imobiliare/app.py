@@ -29,6 +29,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from mcp.server.transport_security import TransportSecuritySettings
 
 from imobiliare.api.routes import router as api_router
 from imobiliare.mcp.server import mcp
@@ -44,9 +45,27 @@ logger = logging.getLogger(__name__)
 # request al unui client poate ateriza pe altă instanță și primi 404 pe sesiune.
 mcp.settings.stateless_http = True
 mcp.settings.json_response = True
-# Calea internă a sub-aplicației; montată mai jos la `/mcp`, endpointul devine
-# exact `/mcp` în loc de `/mcp/mcp`.
-mcp.settings.streamable_http_path = "/"
+# Calea internă a sub-aplicației. Montată mai jos la `/mcp` cu calea internă
+# `/mcp`, nu `/`: cu `/` endpointul real devine `/mcp/`, iar Starlette răspunde
+# la `/mcp` cu un redirect de slash construit ca URL absolut. În spatele unui
+# proxy care termină TLS — adică pe Cloud Run — acel URL iese `http://`, browserul
+# sau clientul e trimis mai departe printr-un 302 http→https care transformă
+# POST-ul în GET și pierde corpul cererii. Fără slash de rezolvat, nu există
+# redirect și nu există problema.
+mcp.settings.streamable_http_path = "/mcp"
+
+# Protecția anti DNS-rebinding a SDK-ului validează `Host` față de o listă care
+# implicit conține doar localhost, deci pe Cloud Run fiecare cerere primea
+# „Invalid Host header" → 421. Hostul serviciului nu e cunoscut la momentul
+# build-ului, așa că vine din mediu; gol înseamnă „acceptă orice host", ceea ce
+# e sigur aici pentru că `/mcp` e oricum păzit de bearer token mai jos.
+_HOSTURI = [h.strip() for h in os.environ.get("IMOBILIARE_MCP_HOSTS", "").split(",") if h.strip()]
+if _HOSTURI:
+    mcp.settings.transport_security = TransportSecuritySettings(allowed_hosts=_HOSTURI)
+else:
+    mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=False
+    )
 
 _mcp_app = mcp.streamable_http_app()
 
@@ -98,8 +117,6 @@ async def _poarta_mcp(request: Request, call_next: Any) -> Any:
     return await call_next(request)
 
 
-app.mount("/mcp", _mcp_app)
-
 _POSSIBLE_DIST_DIRS = [
     Path(__file__).resolve().parents[2] / "web" / "dist",
     Path("/app/web/dist"),
@@ -112,7 +129,17 @@ if _DIST_DIR and (_DIST_DIR / "assets").is_dir():
 
 
 @app.get("/healthz")
+@app.get("/status")
 async def healthz() -> dict[str, Any]:
+    """Starea serviciului, pe două căi.
+
+    `/healthz` funcționează local, dar pe Cloud Run nu ajunge niciodată la
+    container: răspunsul vine fără `x-cloud-trace-context`, deci ceva din fața
+    Cloud Run îl răspunde cu un 404 propriu (la fel pentru orice cale
+    necunoscută). `/status` trece, așa că el este cel de folosit din exterior;
+    `/healthz` rămâne pentru rulările locale și pentru orice sondă care îl
+    caută după nume.
+    """
     return {"status": "ok", "mcp": "/mcp", "ui": bool(_DIST_DIR)}
 
 
@@ -126,7 +153,24 @@ async def index() -> Any:
     }
 
 
+# Montat ULTIMUL și la rădăcină, intenționat. Sub-aplicația își poartă singură
+# calea `/mcp`, deci montarea la `/mcp` ar da `/mcp/mcp`, iar montarea la `/mcp`
+# cu calea internă `/` ar da `/mcp/` plus un redirect de slash. Un Mount pe `/`
+# prinde însă orice cale, așa că trebuie să vină după toate rutele de mai sus —
+# Starlette potrivește în ordinea declarării. Ce ajunge aici și nu e `/mcp` ar fi
+# dat oricum 404.
+app.mount("/", _mcp_app)
+
+
 def main() -> None:
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))  # noqa: S104
+    # Cloud Run termină TLS și trimite mai departe pe http; fără astea uvicorn
+    # crede că schema e http și construiește redirecturi absolute greșite.
+    uvicorn.run(
+        app,
+        host="0.0.0.0",  # noqa: S104
+        port=int(os.environ.get("PORT", "8080")),
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
