@@ -76,7 +76,17 @@ RAW = {
 
 
 def raw(**kw):
-    return {**RAW, **kw}
+    merged = {**RAW, **kw}
+    # Each listing gets its own photograph, because on the portal each one has
+    # its own: `imoradar.dedupe` treats a shared photo as proof that two
+    # records are the same property (measured: no two of 360 real listings
+    # shared one). Letting every fixture inherit the template's single image
+    # would merge them all into one before the test under it ran.
+    if "images" not in kw:
+        merged["images"] = [
+            {"src": f"https://i.roamcdn.net/prop/rad/{merged['id']}.jpg", "alt": ""}
+        ]
+    return merged
 
 
 def source(**kw):
@@ -490,6 +500,65 @@ def test_a_rise_counts_as_no_reduction():
     h = imoradar.summarise_history([point("01.09.2026", 100000), point("10.09.2026", 110000)])
     assert h["change_pct"] == 10.0
     assert h["drops"] == 0
+
+
+# -- duplicates -----------------------------------------------------------
+
+
+def _shot(url: str) -> list[dict[str, str]]:
+    return [{"src": url, "alt": ""}]
+
+
+def test_a_shared_photograph_merges_two_records():
+    """The evidence this source's weaker rule is built on."""
+    same = _shot("https://i.roamcdn.net/prop/rad/same.jpg")
+    out = imoradar.dedupe(
+        [
+            imoradar.normalise(raw(id=1, images=same)),
+            imoradar.normalise(raw(id=2, images=same)),
+        ]
+    )
+    assert len(out) == 1
+
+
+def test_two_flats_with_their_own_photographs_are_left_alone():
+    """Without a street address the remaining fields describe a *type* of
+    flat; panel-block stock would collapse wholesale on price + surface."""
+    out = imoradar.dedupe(
+        [
+            imoradar.normalise(raw(id=1, address="Titan, Sector 3")),
+            imoradar.normalise(raw(id=2, address="Titan, Sector 3")),
+        ]
+    )
+    assert len(out) == 2
+
+
+def test_a_mis_filed_price_never_speaks_for_the_property():
+    """One rent filed as a sale would otherwise delete the real ad beside it.
+
+    Both ads are the same flat — same photograph — so the group survives as
+    one record. If the flagged one represented it, `cauta_imoradar` would drop
+    the group as implausible and the genuine 150.000 EUR ad would vanish from
+    the results, counted only as one exclusion.
+    """
+    same = _shot("https://i.roamcdn.net/prop/rad/same.jpg")
+    flagged_first = imoradar.dedupe(
+        [
+            imoradar.normalise(raw(id=1, price="476 €", images=same)),
+            imoradar.normalise(raw(id=2, price="150.000 €", images=same)),
+        ]
+    )
+    assert [r["price_eur"] for r in flagged_first] == [150000]
+    assert "suspect" not in flagged_first[0]
+
+    # And the same whichever order they arrive in.
+    flagged_second = imoradar.dedupe(
+        [
+            imoradar.normalise(raw(id=2, price="150.000 €", images=same)),
+            imoradar.normalise(raw(id=1, price="476 €", images=same)),
+        ]
+    )
+    assert [r["price_eur"] for r in flagged_second] == [150000]
 
 
 # -- the tool -------------------------------------------------------------

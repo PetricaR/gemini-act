@@ -1,7 +1,7 @@
-.PHONY: help install install-obscura local dev voice serve tunnel test lint fmt setup deploy deploy-adk-ui
+.PHONY: help install install-obscura local dev voice mcp mcp-http mcp-tools serve tunnel test lint fmt setup deploy deploy-adk-ui
 
 help:  ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 install:  ## Sync the virtualenv from the lockfile
 	uv sync
@@ -18,6 +18,15 @@ dev:  ## ADK dev UI (anonymous mode — no Workspace tools)
 voice:  ## Talk to the agent out loud (ADK dev UI, pick `live_agent`, click the mic)
 	@echo "Open http://localhost:8000, select the \033[1mlive_agent\033[0m agent, then click the microphone."
 	uv run adk web src/adk_apps
+
+mcp:  ## Run the imobiliare MCP server on stdio (what a desktop client launches)
+	uv run imobiliare-mcp
+
+mcp-http:  ## Run the imobiliare MCP server over streamable HTTP on :8081
+	uv run imobiliare-mcp --transport streamable-http --port 8081
+
+mcp-tools:  ## Print the imobiliare MCP tool catalogue (no server, no config needed)
+	uv run imobiliare-mcp --list-tools
 
 serve:  ## Run the Chat webhook locally on :8080
 	uv run uvicorn gemini_act.chat.app:app --reload --port 8080

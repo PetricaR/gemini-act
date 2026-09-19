@@ -600,6 +600,26 @@ def _completeness(record: dict[str, Any]) -> int:
     )
 
 
+def _prefer(candidate: dict[str, Any], incumbent: dict[str, Any]) -> bool:
+    """Should `candidate` represent the merged group instead of `incumbent`?
+
+    Completeness decides it, with one rule ahead of it: **a flagged record
+    never represents a group that has a sound member.** `suspect` means the
+    price is below any plausible sale — a rent filed as a sale, or a typo —
+    and `cauta_imoradar` drops flagged records by default. So electing one as
+    the survivor does not drop an ad, it deletes the whole property from the
+    results, genuine ad included, and the count of what was excluded says 1
+    where three listings went missing.
+
+    The two are the same property here by evidence, not by guess — a shared
+    photograph or a full match on a real street address — so the sound
+    sibling is describing the same flat and is the one worth keeping.
+    """
+    if bool(candidate.get("suspect")) != bool(incumbent.get("suspect")):
+        return not candidate.get("suspect")
+    return _completeness(candidate) > _completeness(incumbent)
+
+
 def dedupe(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Collapse re-advertisements of the same property, keeping the fullest.
 
@@ -635,9 +655,9 @@ def dedupe(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 index[k] = len(out)
             out.append(record)
             continue
-        # Same property seen again: keep whichever record says more, and let
-        # the survivor answer to both records' keys.
-        if _completeness(record) > _completeness(out[hit]):
+        # Same property seen again: keep whichever record is worth more, and
+        # let the survivor answer to both records' keys.
+        if _prefer(record, out[hit]):
             out[hit] = record
         for k in found:
             index.setdefault(k, hit)

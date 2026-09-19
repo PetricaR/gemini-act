@@ -7,11 +7,13 @@ An MCP server wrapping imobiliare.ro's AI property search. `README.md` covers
 
 ```
 src/imobiliare/mcp/
+  app.py      the MCP server object, the annotation vocabulary, the error guard
+  cli.py      the `imobiliare-mcp` command: transports, flags, --list-tools
+  server.py   the 28 tools + the shared Filters model
   client.py   HTTP against the two upstream hosts; session handling
   imo360.py   the second source: session-free, geographic, carries rentals
   imoradar.py the third source: an aggregator over every major RO portal
   parse.py    normalise() raw listing -> typed record; filter_and_rank()
-  server.py   MCP tools + the shared Filters model
 ```
 
 The pipeline is always: **fetch → `normalise` once → `filter_and_rank`**.
@@ -33,10 +35,16 @@ scripts.
 
 ## Testing
 
-`@mcp.tool()` on **MCP SDK 2.x returns the plain function**, so tests call the
-tool directly — `cauta(query=...)`, not `cauta.fn(...)`. (SDK 1.x wrapped it in
-an object with `.fn`; this is 2.x, where `FastMCP` was also renamed
-`MCPServer`.)
+`@tool()` (from `app.py`) **returns the plain function**, so tests call the tool
+directly — `cauta(query=...)`, not `cauta.fn(...)`. What gets registered with
+the server is a separate `async` wrapper; the module-level name is untouched,
+which is also what lets `agent_tools/` import and call these in process.
+
+So there are two things to test and they are different: the tool *body*, by
+calling the Python function, and the tool *surface* — names, annotations,
+schemas, the error mapping — which `tests/test_mcp_surface.py` covers as a
+client would read it. Adding a tool means adding it there too; that file
+asserts the catalogue size, so it fails until you do.
 
 Test against `reia` and `detalii`, which need no session. Keep a known-good
 `resume_token` around: tokens outlive their session indefinitely, so one saved
@@ -51,12 +59,19 @@ print(reia(token=open('token.txt').read().strip(),
            filtre=Filters(camere=3, pret_max=220000))['matched'])"
 ```
 
-Smoke-test the stdio protocol after touching `server.py`:
+Smoke-test the published surface after touching `server.py` or `app.py` — this
+needs no configuration and no network:
 
 ```bash
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"p","version":"1"}}}' \
+imobiliare-mcp --list-tools
+```
+
+And the stdio protocol itself, when the wrapper or the transport changed:
+
+```bash
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"p","version":"1"}}}' \
   '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | .venv/bin/imobiliare-mcp
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | imobiliare-mcp --log-level ERROR
 ```
 
 ## Data invariants — the expensive ones
@@ -445,9 +460,35 @@ the other's label produced "cu −4,9% peste nivelul pieței".
 
 ## Conventions
 
-Tool names and filter fields are **Romanian** (`cauta`, `pret_max`, `camere`),
-because the queries and the domain are; internals — code, comments, docstrings
-— are **English**. Keep that split.
+**A tool has two names, and they follow different rules.**
+
+On the wire it is `imobiliare_search_listings`: English, snake_case, and
+prefixed, because MCP clients load this server beside others and a bare `cauta`
+or `detalii` would collide with anything else offering a search. That is the
+`name=` argument to `@tool`, and it is the only string a client ever sees.
+
+In Python it is still `cauta`. Filter fields are still Romanian too
+(`pret_max`, `camere`), because the queries and the domain are, and because
+`agent_tools/` imports these functions by name. Code, comments and docstrings
+are English, as everywhere else.
+
+So: **renaming a wire name is a breaking change for every connected client;
+renaming a Python function is a breaking change for `agent_tools/`.** They are
+decoupled on purpose — change one without the other.
+
+Every tool also carries a `title` and `ToolAnnotations`, built with `read_only`,
+`local` or `writes` from `app.py`. Don't hand-build a `ToolAnnotations`: those
+three helpers exist so that read-only tools leave `destructiveHint` and
+`idempotentHint` unset, which is what the specification asks for — those two are
+meaningful only when `readOnlyHint` is false.
+
+**Raise, don't return, a failure.** A dict with `status: "error"` reaches an MCP
+client as `isError: false`, which reads to a model as success. `app._as_tool_error`
+maps whatever was raised onto a message the caller can act on, so a tool body
+should raise the most specific error it can and let that layer word it. This is
+the opposite of the rule in `gemini_act/agent/tools/`, where an ADK function tool
+has no `isError` channel and the dict is all there is — same intent, different
+protocol.
 
 Adding a filter means three edits: a field on `Filters`, a line in
 `Filters.as_kwargs`, and a check in `filter_and_rank`. Range checks go in the

@@ -35,11 +35,16 @@ dependencies = [
     # (`imobiliare/mcp/drive_docs.py`). Load-bearing rather than optional:
     # reading those documents is the whole point of that module.
     "pypdf>=6.18.1",
+    # `imobiliare/mcp/` is a first-class MCP server (`imobiliare-mcp`), not only
+    # an in-process tool library, so it declares the SDK rather than relying on
+    # google-adk[mcp] to drag it in. Pinned to >=1.29 for the `title` and
+    # `annotations` arguments to `@mcp.tool` that its whole tool surface uses.
+    "mcp>=1.29",
 ]
 
 [project.scripts]
 gemini-act = "gemini_act.chat.app:main"
-imobiliare-mcp = "imobiliare.mcp.server:main"
+imobiliare-mcp = "imobiliare.mcp.cli:main"
 imobiliare-http = "imobiliare.app:main"
 
 [dependency-groups]
