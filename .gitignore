@@ -34,3 +34,10 @@ reports/raport-complet-demo-aviatiei-park.pdf
 # build: deploy/dsh/Dockerfile installs dsh from npm, and gcloud builds submit
 # uploads this whole directory as the build context (318MB / ~11.7k files).
 deepseek-harness/
+
+# Web app dependencies and build output
+node_modules/
+website/dist/
+
+# Personal documents, not code
+oferte_imobiliare/
